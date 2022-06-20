@@ -49,6 +49,10 @@ const (
 	NydusRootfsV6      string = "v6"
 	RafsV5SuperMagic   uint32 = 0x5241_4653
 	RafsSuperVersionV5 uint32 = 0x500
+	// volatileOpt is a key of an optional lablel to each snapshot.
+	// If this optional label of a snapshot is specified, when mounted to rootdir
+	// this snapshot will include volatile option
+	volatileOpt string = "containerd.io/snapshot/overlay.volatile"
 )
 
 var _ snapshots.Snapshotter = &snapshotter{}
@@ -254,6 +258,10 @@ func (o *snapshotter) getSnapShot(ctx context.Context, key string) (*storage.Sna
 }
 
 func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, error) {
+	_, snap, _, err := storage.GetInfo(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get info for snapshot %s: %w", key, err)
+	}
 	s, err := o.getSnapShot(ctx, key)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get active mount")
@@ -275,7 +283,7 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 			return o.remoteMounts(ctx, *s, id, info.Labels)
 		}
 	}
-	return o.mounts(ctx, *s)
+	return o.mounts(ctx, &snap, *s)
 }
 
 func (o *snapshotter) prepareRemoteSnapshot(ctx context.Context, id string, labels map[string]string) error {
@@ -291,16 +299,9 @@ func (o *snapshotter) prepareStargzRemoteSnapshot(ctx context.Context, id string
 func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
 	logCtx := log.G(ctx).WithField("key", key).WithField("parent", parent)
 
-	s, err := o.createSnapshot(ctx, snapshots.KindActive, key, parent, opts)
+	base, s, err := o.createSnapshot(ctx, snapshots.KindActive, key, parent, opts)
 	if err != nil {
 		return nil, err
-	}
-
-	var base snapshots.Info
-	for _, opt := range opts {
-		if err := opt(&base); err != nil {
-			return nil, err
-		}
 	}
 
 	logCtx.Infof("Preparing. Key=%s, Parent=%s, Labels %v", key, parent, base.Labels)
@@ -345,7 +346,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 		}
 	}
-	if prepareForContainer(base) {
+	if prepareForContainer(*base) {
 		logCtx.Infof("prepare for container layer %s", key)
 		if id, info, err := o.findNydusMetaLayer(ctx, key); err == nil {
 			logCtx.Infof("found nydus meta layer id %s, parpare remote snapshot", id)
@@ -374,7 +375,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 		}
 	}
-	return o.mounts(ctx, s)
+	return o.mounts(ctx, base, s)
 }
 
 func (o *snapshotter) findStargzMetaLayer(ctx context.Context, key string) (string, snapshots.Info, error) {
@@ -397,11 +398,12 @@ func prepareForContainer(info snapshots.Info) bool {
 }
 
 func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
-	s, err := o.createSnapshot(ctx, snapshots.KindView, key, parent, opts)
+	base, s, err := o.createSnapshot(ctx, snapshots.KindView, key, parent, opts)
 	if err != nil {
 		return nil, err
 	}
-	return o.mounts(ctx, s)
+
+	return o.mounts(ctx, base, s)
 }
 
 func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
@@ -536,10 +538,17 @@ func (o *snapshotter) workPath(id string) string {
 	return filepath.Join(o.root, "snapshots", id, "work")
 }
 
-func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (_ storage.Snapshot, err error) {
+func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (info *snapshots.Info, _ storage.Snapshot, err error) {
 	ctx, t, err := o.ms.TransactionContext(ctx, true)
 	if err != nil {
-		return storage.Snapshot{}, err
+		return nil, storage.Snapshot{}, err
+	}
+
+	var base snapshots.Info
+	for _, opt := range opts {
+		if err := opt(&base); err != nil {
+			return &base, storage.Snapshot{}, err
+		}
 	}
 
 	var td, path string
@@ -564,7 +573,7 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		if rerr := t.Rollback(); rerr != nil {
 			log.G(ctx).WithError(rerr).Warn("failed to rollback transaction")
 		}
-		return storage.Snapshot{}, errors.Wrap(err, "failed to create prepare snapshot dir")
+		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create prepare snapshot dir")
 	}
 	rollback := true
 	defer func() {
@@ -577,35 +586,35 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 
 	s, err := storage.CreateSnapshot(ctx, kind, key, parent, opts...)
 	if err != nil {
-		return storage.Snapshot{}, errors.Wrap(err, "failed to create snapshot")
+		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create snapshot")
 	}
 
 	if len(s.ParentIDs) > 0 {
 		st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
 		if err != nil {
-			return storage.Snapshot{}, errors.Wrap(err, "failed to stat parent")
+			return nil, storage.Snapshot{}, errors.Wrap(err, "failed to stat parent")
 		}
 
 		if err := lchown(filepath.Join(td, "fs"), st); err != nil {
 			if rerr := t.Rollback(); rerr != nil {
 				log.G(ctx).WithError(rerr).Warn("failed to rollback transaction")
 			}
-			return storage.Snapshot{}, errors.Wrap(err, "failed to chown")
+			return nil, storage.Snapshot{}, errors.Wrap(err, "failed to chown")
 		}
 	}
 
 	path = o.snapshotDir(s.ID)
 	if err = os.Rename(td, path); err != nil {
-		return storage.Snapshot{}, errors.Wrap(err, "failed to rename")
+		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to rename")
 	}
 	td = ""
 
 	rollback = false
 	if err = t.Commit(); err != nil {
-		return storage.Snapshot{}, errors.Wrap(err, "commit failed")
+		return nil, storage.Snapshot{}, errors.Wrap(err, "commit failed")
 	}
 
-	return s, nil
+	return &base, s, nil
 }
 
 func bindMount(source string) []mount.Mount {
@@ -727,7 +736,7 @@ func (o *snapshotter) remoteMounts(ctx context.Context, s storage.Snapshot, id s
 	}, nil
 }
 
-func (o *snapshotter) mounts(ctx context.Context, s storage.Snapshot) ([]mount.Mount, error) {
+func (o *snapshotter) mounts(ctx context.Context, info *snapshots.Info, s storage.Snapshot) ([]mount.Mount, error) {
 	if len(s.ParentIDs) == 0 {
 		// if we only have one layer/no parents then just return a bind mount as overlay
 		// will not work
@@ -754,6 +763,9 @@ func (o *snapshotter) mounts(ctx context.Context, s storage.Snapshot) ([]mount.M
 			fmt.Sprintf("workdir=%s", o.workPath(s.ID)),
 			fmt.Sprintf("upperdir=%s", o.upperPath(s.ID)),
 		)
+		if _, ok := info.Labels[volatileOpt]; ok {
+			options = append(options, "volatile")
+		}
 	} else if len(s.ParentIDs) == 1 {
 		return []mount.Mount{
 			{
