@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -853,8 +854,55 @@ func (o *snapshotter) cleanupSnapshotDirectory(ctx context.Context, dir string) 
 		}
 	}
 
+	snapshotDir := o.snapshotRoot()
 	if err := os.RemoveAll(dir); err != nil {
-		return errors.Wrapf(err, "failed to remove directory %q", dir)
+		log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
+
+		// NOTE: check whether it is permission error
+		// If so, we should change chattr or swapoff it.
+		// And next round of gc will remove it.
+		if !os.IsPermission(err) {
+			return nil
+		}
+
+		perr, ok := err.(*os.PathError)
+		if !ok {
+			log.G(ctx).WithField("path", dir).Warn("failed to retry cleanup because we don't know which file has permission error")
+			return nil
+		}
+
+		// FIXME(yuge.fw): cleanupDirectories must return
+		// the dirs in the snapshotDir. I think we can
+		// skip this check.
+		if matched := strings.HasPrefix(perr.Path, snapshotDir); !matched {
+			log.G(ctx).WithField("path", dir).Warnf("failed to retry cleanup: %s is not sub dir/file in overlay snapshotter dir(%s)", perr.Path, snapshotDir)
+			return nil
+		}
+
+		// try to remove immutable flag
+		cmd := exec.Command("chattr", "-i", "-a", perr.Path)
+		if _, cherr := cmd.CombinedOutput(); cherr != nil {
+			log.G(ctx).WithError(cherr).WithField("path", dir).Warnf("failed to chattr -i %s", perr.Path)
+		}
+
+		// try to swapoff
+		cmd = exec.Command("swapoff", perr.Path)
+		if _, serr := cmd.CombinedOutput(); serr != nil {
+			log.G(ctx).WithError(serr).WithField("path", dir).Warnf("failed to swapoff %s", perr.Path)
+		}
+
+		// NOTE: it might still fail because there are many
+		// immutable files in the rm-* dir or other unknown
+		// cases.
+		//
+		// for the many-immutable-files case, the Cleanup will
+		// be called in next snapshotter gc round. We don't
+		// need to resolve the issue in one round.
+		if aerr := os.RemoveAll(dir); aerr != nil {
+			log.G(ctx).WithError(aerr).WithField("path", dir).Warn("failed to remove directory again")
+			return nil
+		}
+		log.G(ctx).WithField("path", dir).Info("try to resolve the permission error and remove it successfully")
 	}
 	return nil
 }
