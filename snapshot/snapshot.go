@@ -28,6 +28,7 @@ import (
 	"github.com/containerd/nydus-snapshotter/pkg/cache"
 	metrics "github.com/containerd/nydus-snapshotter/pkg/metric"
 	"github.com/containerd/nydus-snapshotter/pkg/store"
+	"github.com/containerd/nydus-snapshotter/pkg/tracing"
 	"github.com/pkg/errors"
 
 	"github.com/containerd/nydus-snapshotter/config"
@@ -64,7 +65,9 @@ type snapshotter struct {
 	cleanupOnClose       bool
 }
 
-func (o *snapshotter) Cleanup(ctx context.Context) error {
+func (o *snapshotter) Cleanup(ctx context.Context) (retErr error) {
+	ctx, span, cancel := tracing.StartSpan(ctx, "Snapshot::Overlay::Cleanup")
+	defer cancel(retErr)
 	cleanup, err := o.cleanupDirectories(ctx)
 	if err != nil {
 		return err
@@ -72,6 +75,7 @@ func (o *snapshotter) Cleanup(ctx context.Context) error {
 
 	log.G(ctx).Infof("cleanup: dirs=%v", cleanup)
 	for _, dir := range cleanup {
+		span.AddEvent(fmt.Sprintf("Overlay Cleanup %s", dir))
 		if err := o.cleanupSnapshotDirectory(ctx, dir); err != nil {
 			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
 		}
@@ -222,7 +226,10 @@ func ByteCountDecimal(b int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
 
-func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (snapshots.Info, error) {
+func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (_ snapshots.Info, retErr error) {
+	ctx, span, cancel := tracing.StartSpan(ctx, "Snapshot::Overlay::Update")
+	defer cancel(retErr)
+	tracing.SetString(span, "SnapshotName", info.Name)
 	return snapshot.UpdateSnapshotInfo(ctx, o.ms, info, fieldpaths...)
 }
 
@@ -246,7 +253,10 @@ func (o *snapshotter) getSnapShot(ctx context.Context, key string) (*storage.Sna
 	return snapshot.GetSnapshot(ctx, o.ms, key)
 }
 
-func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, error) {
+func (o *snapshotter) Mounts(ctx context.Context, key string) (_ []mount.Mount, retErr error) {
+	ctx, span, cancel := tracing.StartSpan(ctx, "Snapshot::Overlay::Mounts")
+	defer cancel(retErr)
+	tracing.SetString(span, "SnapshotKey", key)
 	s, err := o.getSnapShot(ctx, key)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get active mount")
@@ -376,7 +386,11 @@ func (o *snapshotter) View(ctx context.Context, key, parent string, opts ...snap
 	return o.mounts(ctx, base, s)
 }
 
-func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) error {
+func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snapshots.Opt) (retErr error) {
+	ctx, span, cancel := tracing.StartSpan(ctx, "Snapshot::Overlay::Commit")
+	defer cancel(retErr)
+	tracing.SetString(span, "SnapshotKey", key)
+	tracing.SetString(span, "SnapshotName", name)
 	ctx, t, err := o.ms.TransactionContext(ctx, true)
 	if err != nil {
 		return err
@@ -408,7 +422,10 @@ func (o *snapshotter) Commit(ctx context.Context, name, key string, opts ...snap
 	return t.Commit()
 }
 
-func (o *snapshotter) Remove(ctx context.Context, key string) error {
+func (o *snapshotter) Remove(ctx context.Context, key string) (retErr error) {
+	ctx, span, cancel := tracing.StartSpan(ctx, "Snapshot::Overlay::Remove")
+	defer cancel(retErr)
+	tracing.SetString(span, "SnapshotKey", key)
 	ctx, t, err := o.ms.TransactionContext(ctx, true)
 	if err != nil {
 		return err
@@ -471,7 +488,9 @@ func (o *snapshotter) Remove(ctx context.Context, key string) error {
 	return t.Commit()
 }
 
-func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) error {
+func (o *snapshotter) Walk(ctx context.Context, fn snapshots.WalkFunc, fs ...string) (retErr error) {
+	ctx, _, cancel := tracing.StartSpan(ctx, "Snapshot::Overlay::Walk")
+	defer cancel(retErr)
 	ctx, t, err := o.ms.TransactionContext(ctx, false)
 	if err != nil {
 		return err
@@ -503,6 +522,11 @@ func (o *snapshotter) workPath(id string) string {
 }
 
 func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, key, parent string, opts []snapshots.Opt) (info *snapshots.Info, _ storage.Snapshot, err error) {
+	ctx, span, cancel := tracing.StartSpan(ctx, "Snapshot::Overlay::createSnapshot")
+	defer cancel(err)
+	tracing.SetString(span, "SnapshotKey", key)
+	tracing.SetString(span, "Parent", parent)
+	tracing.SetString(span, "Kind", kind.String())
 	ctx, t, err := o.ms.TransactionContext(ctx, true)
 	if err != nil {
 		return nil, storage.Snapshot{}, err
