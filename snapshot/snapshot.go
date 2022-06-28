@@ -16,6 +16,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/containerd/containerd/errdefs"
@@ -198,8 +199,27 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 }
 
 func (o *snapshotter) Stat(ctx context.Context, key string) (snapshots.Info, error) {
-	_, info, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+	id, info, size, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+	if info.Labels == nil {
+		info.Labels = map[string]string{}
+	}
+	info.Labels["Backend-id"] = id
+	info.Labels["Backend-inode"] = strconv.FormatInt(size.Inodes, 10)
+	info.Labels["Backend-size"] = ByteCountDecimal(size.Size)
 	return info, err
+}
+
+func ByteCountDecimal(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
 
 func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (snapshots.Info, error) {
