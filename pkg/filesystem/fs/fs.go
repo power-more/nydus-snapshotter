@@ -107,7 +107,7 @@ type Filesystem struct {
 	logToStdout          bool
 	vpcRegistry          bool
 	mode                 Mode
-	imageMode            ImageMode
+	ImageMode            ImageMode
 }
 
 // NewFileSystem initialize Filesystem instance
@@ -119,7 +119,7 @@ func NewFileSystem(ctx context.Context, opt ...NewFSOpt) (*Filesystem, error) {
 			return nil, err
 		}
 	}
-	if fs.imageMode == PreLoad {
+	if fs.ImageMode == PreLoad {
 		fs.blobMgr = NewBlobManager(fs.daemonCfg.Device.Backend.Config.Dir)
 		go func() {
 			err := fs.blobMgr.Run(ctx)
@@ -136,11 +136,11 @@ func NewFileSystem(ctx context.Context, opt ...NewFSOpt) (*Filesystem, error) {
 	return &fs, nil
 }
 
-func (fs *Filesystem) CleanupBlobLayer(ctx context.Context, key string, async bool) error {
+func (fs *Filesystem) CleanupBlobLayer(ctx context.Context, blobDigest string, async bool) error {
 	if fs.blobMgr == nil {
 		return nil
 	}
-	return fs.blobMgr.Remove(key, async)
+	return fs.blobMgr.Remove(blobDigest, async)
 }
 
 func (fs *Filesystem) PrepareBlobLayer(ctx context.Context, snapshot storage.Snapshot, labels map[string]string) error {
@@ -154,7 +154,7 @@ func (fs *Filesystem) PrepareBlobLayer(ctx context.Context, snapshot storage.Sna
 		log.G(ctx).Infof("total nydus prepare data layer duration %d ms", duration.Milliseconds())
 	}()
 
-	ref, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest, _ := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return fmt.Errorf("can not find ref and digest from label %+v", labels)
 	}
@@ -244,7 +244,7 @@ func (fs *Filesystem) SupportStargz(ctx context.Context, labels map[string]strin
 	if !fs.StargzEnabled() {
 		return false, "", "", nil
 	}
-	ref, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest, _ := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return false, "", "", nil
 	}
@@ -461,6 +461,11 @@ func (fs *Filesystem) StargzLayer(labels map[string]string) bool {
 func (fs *Filesystem) Support(ctx context.Context, labels map[string]string) bool {
 	_, dataOk := labels[label.NydusDataLayer]
 	return dataOk
+}
+
+func (fs *Filesystem) SupportMeta(ctx context.Context, labels map[string]string) bool {
+	_, metaOk := labels[label.NydusMetaLayer]
+	return metaOk
 }
 
 // Mount will be called when containerd snapshotter prepare remote snapshotter

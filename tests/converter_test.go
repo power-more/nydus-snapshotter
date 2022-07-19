@@ -188,7 +188,7 @@ func convertLayer(t *testing.T, source io.ReadCloser, chunkDict, workDir string,
 	twc, err := converter.Pack(context.TODO(), writer, converter.PackOption{
 		ChunkDictPath: chunkDict,
 		FsVersion:     fsVersion,
-	})
+	}, "")
 	require.NoError(t, err)
 
 	_, err = io.Copy(twc, source)

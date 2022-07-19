@@ -27,6 +27,7 @@ const (
 )
 
 type Args struct {
+	ContainerdAddress    string
 	Address              string
 	LogLevel             string
 	LogDir               string
@@ -85,6 +86,11 @@ func buildFlags(args *Args) []cli.Flag {
 			Aliases:     []string{"c", "config"},
 			Usage:       "path to the configuration `FILE`",
 			Destination: &args.ConfigPath,
+		},
+		&cli.StringFlag{
+			Name:        "containerd-sock-address",
+			Usage:       "path to the containerd socket address",
+			Destination: &args.ContainerdAddress,
 		},
 		&cli.BoolFlag{
 			Name:        "convert-vpc-registry",
@@ -219,6 +225,7 @@ func Validate(args *Args, cfg *config.Config) error {
 		return errors.Wrapf(err, "failed to load config file %q", args.ConfigPath)
 	}
 	cfg.DaemonCfg = daemonCfg
+	cfg.ContainerdAddress = args.ContainerdAddress
 
 	if args.ValidateSignature {
 		if args.PublicKeyFile == "" {
