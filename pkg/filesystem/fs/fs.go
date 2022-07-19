@@ -26,6 +26,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
+	acceldConfig "github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
+	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/handler"
 	"github.com/containerd/nydus-snapshotter/config"
 	"github.com/containerd/nydus-snapshotter/pkg/auth"
 	"github.com/containerd/nydus-snapshotter/pkg/cache"
@@ -456,6 +458,73 @@ func (fs *Filesystem) PrepareStargzMetaLayer(ctx context.Context, blob *stargz.B
 
 func (fs *Filesystem) StargzLayer(labels map[string]string) bool {
 	return labels[label.StargzLayer] != ""
+}
+
+func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, snapshot storage.Snapshot, labels map[string]string) error {
+	if fs.imageMode != PreLoad {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		duration := time.Since(start)
+		log.G(ctx).Infof("total oci downloading and converting to nydus layer duration %d ms", duration.Milliseconds())
+	}()
+
+	source, _ := labels[label.CRIImageRef]
+	if source == "" {
+		return fmt.Errorf("source is required")
+	}
+
+	var cfgpath string = "/apsara/zhaoshang.zs/acceld-dir/config-acceld.yaml"
+	cfg, err := acceldConfig.Parse(cfgpath)
+	if err != nil {
+		return err
+	}
+	handler, err := handler.NewLocalHandler(cfg)
+	if err != nil {
+		return err
+	}
+
+	return handler.Convert(ctx, source, true)
+	// =========================================
+	ref, layerDigest := registry.ParseLabels(labels)
+	if ref == "" || layerDigest == "" {
+		return fmt.Errorf("can not find ref and digest from label %+v", labels)
+	}
+	blobPath, err := getBlobPath(fs.blobMgr.GetBlobDir(), layerDigest)
+	if err != nil {
+		return errors.Wrap(err, "failed to get blob path")
+	}
+	_, err = os.Stat(blobPath)
+	if err == nil {
+		log.G(ctx).Debugf("%s blob layer already exists", blobPath)
+		return nil
+	} else if !os.IsNotExist(err) {
+		return errors.Wrap(err, "Unexpected error, we can't handle it")
+	}
+
+	readerCloser, err := fs.resolver.Resolve(ref, layerDigest, labels)
+	if err != nil {
+		return errors.Wrapf(err, "failed to resolve from ref %s, digest %s", ref, layerDigest)
+	}
+	defer readerCloser.Close()
+
+	blobFile, err := os.OpenFile(blobPath, os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return errors.Wrap(err, "failed to create blob file")
+	}
+	defer blobFile.Close()
+
+	_, err = io.Copy(blobFile, readerCloser)
+	if err != nil {
+		if err := os.Remove(blobPath); err != nil {
+			log.G(ctx).Warnf("failed to remove blob file %s", blobPath)
+		}
+		return errors.Wrap(err, "write blob to local file")
+	}
+
+	return err
 }
 
 func (fs *Filesystem) Support(ctx context.Context, labels map[string]string) bool {
