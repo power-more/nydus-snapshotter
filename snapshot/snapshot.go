@@ -44,6 +44,7 @@ var _ snapshots.Snapshotter = &snapshotter{}
 
 type snapshotter struct {
 	context              context.Context
+	containerdSockPath   string
 	root                 string
 	nydusdPath           string
 	ms                   *storage.MetaStore
@@ -162,6 +163,7 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 
 	return &snapshotter{
 		context:              ctx,
+		containerdSockPath:   cfg.ContainerdSockPath,
 		root:                 cfg.RootDir,
 		nydusdPath:           cfg.NydusdBinaryPath,
 		ms:                   ms,
@@ -280,6 +282,19 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			} else {
 				// Mark this snapshot as stargz layer
 				base.Labels[label.StargzLayer] = "true"
+				err := o.Commit(ctx, target, key, append(opts, snapshots.WithLabels(base.Labels))...)
+				if err == nil || errdefs.IsAlreadyExists(err) {
+					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
+				}
+			}
+		}
+
+		// Download OCI and convert to nydus
+		if o.containerdSockPath != "" {
+			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels)
+			if err != nil {
+				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
+			} else {
 				err := o.Commit(ctx, target, key, append(opts, snapshots.WithLabels(base.Labels))...)
 				if err == nil || errdefs.IsAlreadyExists(err) {
 					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
