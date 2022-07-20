@@ -17,15 +17,16 @@ package converter
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/pkg/cri/constants"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/content"
-	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/converter/annotation"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/errdefs"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/metrics"
@@ -55,17 +56,18 @@ type LocalConverter struct {
 	driver      driver.Driver
 }
 
-func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
+func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter, error) {
 	client, err := containerd.New(
 		cfg.Provider.Containerd.Address,
-		containerd.WithDefaultNamespace("harbor-acceleration-service"),
+		containerd.WithDefaultNamespace(constants.K8sContainerdNamespace),
 	)
 	if err != nil {
 		return nil, errors.Wrap(err, "create containerd client")
 	}
+	logrus.Info("====zhaoshang containerdclient=====  %#+v ", *client)
 	snapshotter := client.SnapshotService(cfg.Provider.Containerd.Snapshotter)
 
-	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver)
+	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver, bootstrap)
 	if err != nil {
 		return nil, errors.Wrap(err, "create driver")
 	}
@@ -121,30 +123,11 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
 	logger.Infof("pulled image %s", source)
 
 	logger.Infof("converting image %s", source)
-	desc, err := cvt.driver.Convert(ctx, content)
+	_, err = cvt.driver.Convert(ctx, content)
 	if err != nil {
 		return errors.Wrap(err, "convert image")
 	}
-
-	if cvt.cfg.Converter.HarborAnnotation {
-		// Append extra annotations to converted image for harbor usage.
-		// FIXME: implement a containerd#converter.ConvertFunc to avoid creating the new manifest/index.
-		desc, err = annotation.Append(ctx, content, desc, annotation.Appended{
-			DriverName:    cvt.driver.Name(),
-			DriverVersion: cvt.driver.Version(),
-			SourceDigest:  content.Image().Target().Digest.String(),
-		})
-		if err != nil {
-			return errors.Wrap(err, "append annotations")
-		}
-	}
 	logger.Infof("converted image %s", target)
-
-	logger.Infof("pushing image %s", target)
-	if err := content.Push(ctx, *desc, target); err != nil {
-		return errors.Wrap(err, "push image")
-	}
-	logger.Infof("pushed image %s", target)
 
 	return nil
 }
