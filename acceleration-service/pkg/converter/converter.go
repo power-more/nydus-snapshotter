@@ -17,6 +17,7 @@ package converter
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/snapshots"
@@ -55,7 +56,7 @@ type LocalConverter struct {
 	driver      driver.Driver
 }
 
-func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
+func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter, error) {
 	client, err := containerd.New(
 		cfg.Provider.Containerd.Address,
 		containerd.WithDefaultNamespace("harbor-acceleration-service"),
@@ -63,9 +64,10 @@ func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "create containerd client")
 	}
+	logrus.Info("====zhaoshang containerdclient=====  %#+v ", *client)
 	snapshotter := client.SnapshotService(cfg.Provider.Containerd.Snapshotter)
 
-	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver)
+	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver, bootstrap)
 	if err != nil {
 		return nil, errors.Wrap(err, "create driver")
 	}
@@ -92,11 +94,11 @@ func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
 }
 
 func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
-	ctx, done, err := cvt.client.WithLease(ctx)
+	ctx, _, err := cvt.client.WithLease(ctx)
 	if err != nil {
 		return errors.Wrap(err, "create lease")
 	}
-	defer done(ctx)
+	// defer done(ctx)
 
 	target, err := cvt.rule.Map(source)
 	if err != nil {
@@ -140,11 +142,11 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
 	}
 	logger.Infof("converted image %s", target)
 
-	logger.Infof("pushing image %s", target)
-	if err := content.Push(ctx, *desc, target); err != nil {
-		return errors.Wrap(err, "push image")
-	}
-	logger.Infof("pushed image %s", target)
+	// logger.Infof("pushing image %s", target)
+	// if err := content.Push(ctx, *desc, target); err != nil {
+	// 	return errors.Wrap(err, "push image")
+	// }
+	// logger.Infof("pushed image %s", target)
 
 	return nil
 }

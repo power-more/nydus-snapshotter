@@ -15,22 +15,21 @@
 package nydus
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"io"
+	"os"
 
 	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus/utils"
+	"github.com/containerd/containerd/log"
 	nydusify "github.com/containerd/nydus-snapshotter/pkg/converter"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/identity"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
-func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.Descriptor, opt nydusify.MergeOption, fsVersion string) (*ocispecs.Descriptor, error) {
+func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.Descriptor, opt nydusify.MergeOption, fsVersion string, bootstrap *os.File) (*ocispec.Descriptor, error) {
 	// Extracts nydus bootstrap from nydus format for each layer.
 	layers := []nydusify.Layer{}
 	blobIDs := []string{}
@@ -59,64 +58,66 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.De
 	go func() {
 		defer pw.Close()
 		if err := nydusify.Merge(ctx, layers, pw, nydusify.MergeOption{
-			WithTar: true,
+			WithTar: false,
 		}); err != nil {
 			pw.CloseWithError(errors.Wrapf(err, "merge nydus bootstrap"))
 		}
 	}()
 
 	// Compress final nydus bootstrap to tar.gz and write into content store.
-	cw, err := content.OpenWriter(ctx, cs, content.WithRef("nydus-merge-"+chainID.String()))
-	if err != nil {
-		return nil, errors.Wrap(err, "open content store writer")
-	}
+	var cw = bootstrap
+	// cw, err := content.OpenWriter(ctx, cs, content.WithRef("nydus-merge-"+chainID.String()))
+	// if err != nil {
+	// 	return nil, errors.Wrap(err, "open content store writer")
+	// }
 	defer cw.Close()
 
-	gw := gzip.NewWriter(cw)
 	uncompressedDgst := digest.SHA256.Digester()
-	compressed := io.MultiWriter(gw, uncompressedDgst.Hash())
-	if _, err := io.Copy(compressed, pr); err != nil {
-		return nil, errors.Wrapf(err, "copy bootstrap targz into content store")
+	uncompressed := io.MultiWriter(cw, uncompressedDgst.Hash())
+	if _, err := io.Copy(uncompressed, pr); err != nil {
+		log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) fail =====  %#+v ", uncompressed)
+		return nil, errors.Wrapf(err, "copy uncompressed bootstrap into %s", bootstrap.Name())
 	}
-	if err := gw.Close(); err != nil {
+	log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) success =====  %#+v ", uncompressed)
+	if err := cw.Close(); err != nil {
 		return nil, errors.Wrap(err, "close gzip writer")
 	}
 
-	compressedDgst := cw.Digest()
-	if err := cw.Commit(ctx, 0, compressedDgst, content.WithLabels(map[string]string{
-		utils.LayerAnnotationUncompressed: uncompressedDgst.Digest().String(),
-	})); err != nil {
-		if !errdefs.IsAlreadyExists(err) {
-			return nil, errors.Wrap(err, "commit to content store")
-		}
-	}
-	if err := cw.Close(); err != nil {
-		return nil, errors.Wrap(err, "close content store writer")
-	}
+	// compressedDgst := cw.Digest()
+	// if err := cw.Commit(ctx, 0, compressedDgst, content.WithLabels(map[string]string{
+	// 	utils.LayerAnnotationUncompressed: uncompressedDgst.Digest().String(),
+	// })); err != nil {
+	// 	if !errdefs.IsAlreadyExists(err) {
+	// 		return nil, errors.Wrap(err, "commit to content store")
+	// 	}
+	// }
+	// if err := cw.Close(); err != nil {
+	// 	return nil, errors.Wrap(err, "close content store writer")
+	// }
 
-	info, err := cs.Info(ctx, compressedDgst)
-	if err != nil {
-		return nil, errors.Wrap(err, "get info from content store")
-	}
+	// info, err := cs.Info(ctx, compressedDgst)
+	// if err != nil {
+	// 	return nil, errors.Wrap(err, "get info from content store")
+	// }
 
-	blobIDsBytes, err := json.Marshal(blobIDs)
-	if err != nil {
-		return nil, errors.Wrap(err, "marshal blob ids")
-	}
+	// blobIDsBytes, err := json.Marshal(blobIDs)
+	// if err != nil {
+	// 	return nil, errors.Wrap(err, "marshal blob ids")
+	// }
 
-	desc := ocispecs.Descriptor{
-		Digest:    compressedDgst,
-		Size:      info.Size,
-		MediaType: ocispecs.MediaTypeImageLayerGzip,
-		Annotations: map[string]string{
-			utils.LayerAnnotationUncompressed:   uncompressedDgst.Digest().String(),
-			utils.LayerAnnotationNydusFsVersion: fsVersion,
-			// Use this annotation to identify nydus bootstrap layer.
-			nydusify.LayerAnnotationNydusBootstrap: "true",
-			// Track all blob digests for nydus snapshotter.
-			nydusify.LayerAnnotationNydusBlobIDs: string(blobIDsBytes),
-		},
-	}
+	// desc := ocispecs.Descriptor{
+	// 	Digest:    compressedDgst,
+	// 	Size:      info.Size,
+	// 	MediaType: ocispecs.MediaTypeImageLayerGzip,
+	// 	Annotations: map[string]string{
+	// 		utils.LayerAnnotationUncompressed:   uncompressedDgst.Digest().String(),
+	// 		utils.LayerAnnotationNydusFsVersion: fsVersion,
+	// 		// Use this annotation to identify nydus bootstrap layer.
+	// 		nydusify.LayerAnnotationNydusBootstrap: "true",
+	// 		// Track all blob digests for nydus snapshotter.
+	// 		nydusify.LayerAnnotationNydusBlobIDs: string(blobIDsBytes),
+	// 	},
+	// }
 
-	return &desc, nil
+	return &ocispec.Descriptor{}, nil
 }

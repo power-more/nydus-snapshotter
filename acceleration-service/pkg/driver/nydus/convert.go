@@ -29,6 +29,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend) converter.ConvertFunc {
@@ -84,6 +85,7 @@ func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend) conve
 		}
 
 		blobDigest := digester.Digest()
+		logrus.Info("====zhaoshang blobDigest=====  %#+v ", blobDigest)
 		info, err := cs.Info(ctx, blobDigest)
 		if err != nil {
 			return nil, errors.Wrapf(err, "get blob info %s", blobDigest)

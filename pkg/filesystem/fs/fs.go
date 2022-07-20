@@ -405,6 +405,11 @@ func (fs *Filesystem) Support(ctx context.Context, labels map[string]string) boo
 	return dataOk
 }
 
+func (fs *Filesystem) SupportMeta(ctx context.Context, labels map[string]string) bool {
+	_, metaOk := labels[label.NydusMetaLayer]
+	return metaOk
+}
+
 func (fs *Filesystem) StargzLayer(labels map[string]string) bool {
 	return labels[label.StargzLayer] != ""
 }
@@ -477,7 +482,9 @@ func writeBootstrapToFile(reader io.Reader, bootstrap *os.File, LegacyBootstrap 
 	return err
 }
 
-func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, snapshot storage.Snapshot, labels map[string]string) error {
+var SourceSet map[string]bool = make(map[string]bool)
+
+func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, cfgpath string) error {
 	if fs.imageMode != PreLoad {
 		return nil
 	}
@@ -488,60 +495,103 @@ func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, snapshot stora
 		log.G(ctx).Infof("total oci downloading and converting to nydus layer duration %d ms", duration.Milliseconds())
 	}()
 
-	source, _ := labels[label.CRIImageRef]
+	source, _ := registry.ParseLabels(labels)
 	if source == "" {
-		return fmt.Errorf("source is required")
+		return fmt.Errorf("can not find ref and digest from label %+v", labels)
+	}
+	if _, ok := SourceSet[source]; ok {
+		log.G(ctx).Infof("%s has been converted to nydus")
+		return nil
 	}
 
-	var cfgpath string = "/apsara/zhaoshang.zs/acceld-dir/config-acceld.yaml"
+	workdir := filepath.Join(fs.UpperPath(s.ID), BootstrapFile)
+	err := os.Mkdir(filepath.Dir(workdir), 0755)
+	if err != nil {
+		return errors.Wrap(err, "failed to create bootstrap dir")
+	}
+	nydusBootstrap, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
+	if err != nil {
+		return errors.Wrap(err, "failed to create bootstrap file")
+	}
+
+	// defer func() {
+	// 	closeEmptyFile := []struct {
+	// 		file *os.File
+	// 		path string
+	// 	}{
+	// 		{
+	// 			file: nydusBootstrap,
+	// 			path: workdir,
+	// 		},
+	// 	}
+	// 	for _, in := range closeEmptyFile {
+	// 		size, err := in.file.Seek(0, io.SeekEnd)
+	// 		if err != nil {
+	// 			log.G(ctx).Warnf("failed to seek bootstrap %s file, error %s", workdir, err)
+	// 		}
+	// 		in.file.Close()
+	// 		if size == 0 {
+	// 			os.Remove(in.path)
+	// 		}
+	// 	}
+	// }()
+
 	cfg, err := acceldConfig.Parse(cfgpath)
 	if err != nil {
 		return err
 	}
-	handler, err := handler.NewLocalHandler(cfg)
+	handler, err := handler.NewLocalHandler(cfg, nydusBootstrap)
+	log.G(ctx).Info("====zhaoshang handler=====  %#+v ", *handler)
 	if err != nil {
 		return err
 	}
 
-	return handler.Convert(ctx, source, true)
-	// =========================================
-	ref, layerDigest := registry.ParseLabels(labels)
-	if ref == "" || layerDigest == "" {
-		return fmt.Errorf("can not find ref and digest from label %+v", labels)
-	}
-	blobPath, err := getBlobPath(fs.blobMgr.GetBlobDir(), layerDigest)
-	if err != nil {
-		return errors.Wrap(err, "failed to get blob path")
-	}
-	_, err = os.Stat(blobPath)
-	if err == nil {
-		log.G(ctx).Debugf("%s blob layer already exists", blobPath)
+	if err = handler.Convert(context.Background(), source, true); err == nil {
+		SourceSet[source] = true
+		log.G(ctx).Info("====zhaoshang success=====  %#+v ", SourceSet)
 		return nil
-	} else if !os.IsNotExist(err) {
-		return errors.Wrap(err, "Unexpected error, we can't handle it")
+	} else {
+		log.G(ctx).Info("====zhaoshang err=====  %#+v ", err)
+		return err
 	}
+	// =========================================
+	// ref, layerDigest := registry.ParseLabels(labels)
+	// if ref == "" || layerDigest == "" {
+	// 	return fmt.Errorf("can not find ref and digest from label %+v", labels)
+	// }
+	// blobPath, err := getBlobPath(fs.blobMgr.GetBlobDir(), layerDigest)
+	// if err != nil {
+	// 	return errors.Wrap(err, "failed to get blob path")
+	// }
+	// _, err = os.Stat(blobPath)
+	// if err == nil {
+	// 	log.G(ctx).Debugf("%s blob layer already exists", blobPath)
+	// 	return nil
+	// } else if !os.IsNotExist(err) {
+	// 	return errors.Wrap(err, "Unexpected error, we can't handle it")
+	// }
 
-	readerCloser, err := fs.resolver.Resolve(ref, layerDigest, labels)
-	if err != nil {
-		return errors.Wrapf(err, "failed to resolve from ref %s, digest %s", ref, layerDigest)
-	}
-	defer readerCloser.Close()
+	// readerCloser, err := fs.resolver.Resolve(ref, layerDigest, labels)
+	// if err != nil {
+	// 	return errors.Wrapf(err, "failed to resolve from ref %s, digest %s", ref, layerDigest)
+	// }
+	// defer readerCloser.Close()
 
-	blobFile, err := os.OpenFile(blobPath, os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		return errors.Wrap(err, "failed to create blob file")
-	}
-	defer blobFile.Close()
+	// blobFile, err := os.OpenFile(blobPath, os.O_CREATE|os.O_RDWR, 0666)
+	// if err != nil {
+	// 	return errors.Wrap(err, "failed to create blob file")
+	// }
+	// defer blobFile.Close()
 
-	_, err = io.Copy(blobFile, readerCloser)
-	if err != nil {
-		if err := os.Remove(blobPath); err != nil {
-			log.G(ctx).Warnf("failed to remove blob file %s", blobPath)
-		}
-		return errors.Wrap(err, "write blob to local file")
-	}
+	// _, err = io.Copy(blobFile, readerCloser)
+	// if err != nil {
+	// 	if err := os.Remove(blobPath); err != nil {
+	// 		log.G(ctx).Warnf("failed to remove blob file %s", blobPath)
+	// 	}
+	// 	return errors.Wrap(err, "write blob to local file")
+	// }
 
-	return err
+	// return err
 }
 
 func (fs *Filesystem) PrepareMetaLayer(ctx context.Context, s storage.Snapshot, labels map[string]string) error {

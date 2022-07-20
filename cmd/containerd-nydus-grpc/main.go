@@ -30,7 +30,7 @@ func main() {
 		Action: func(c *cli.Context) error {
 			var cfg config.Config
 			if err := command.Validate(flags.Args, &cfg); err != nil {
-				return errors.Wrap(err, "invalid argument")
+				return errors.Wrap(err, "invalid argument tmp")
 			}
 
 			ctx := logging.WithContext()
