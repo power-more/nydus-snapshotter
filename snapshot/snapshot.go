@@ -341,6 +341,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			} else if err := o.prepareRemoteSnapshot(ctx, id, info.Labels); err != nil {
 				return nil, err
 			}
+			logCtx.Infof("====zhaoshang findMetaLayer=====id = %#v, info = %#v, base = %#v", id, info, *base)
 			return o.remoteMounts(ctx, s, id, info.Labels)
 		}
 	}

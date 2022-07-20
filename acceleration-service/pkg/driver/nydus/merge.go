@@ -32,7 +32,6 @@ import (
 func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.Descriptor, opt nydusify.MergeOption, fsVersion string, bootstrap *os.File) (*ocispec.Descriptor, error) {
 	// Extracts nydus bootstrap from nydus format for each layer.
 	layers := []nydusify.Layer{}
-	blobIDs := []string{}
 
 	var chainID digest.Digest
 	for _, blobDesc := range descs {
@@ -41,7 +40,6 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.De
 			return nil, errors.Wrapf(err, "get reader for blob %q", blobDesc.Digest)
 		}
 		defer ra.Close()
-		blobIDs = append(blobIDs, blobDesc.Digest.Hex())
 		layers = append(layers, nydusify.Layer{
 			Digest:   blobDesc.Digest,
 			ReaderAt: ra,
@@ -66,10 +64,6 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.De
 
 	// Compress final nydus bootstrap to tar.gz and write into content store.
 	var cw = bootstrap
-	// cw, err := content.OpenWriter(ctx, cs, content.WithRef("nydus-merge-"+chainID.String()))
-	// if err != nil {
-	// 	return nil, errors.Wrap(err, "open content store writer")
-	// }
 	defer cw.Close()
 
 	uncompressedDgst := digest.SHA256.Digester()
@@ -82,42 +76,6 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.De
 	if err := cw.Close(); err != nil {
 		return nil, errors.Wrap(err, "close gzip writer")
 	}
-
-	// compressedDgst := cw.Digest()
-	// if err := cw.Commit(ctx, 0, compressedDgst, content.WithLabels(map[string]string{
-	// 	utils.LayerAnnotationUncompressed: uncompressedDgst.Digest().String(),
-	// })); err != nil {
-	// 	if !errdefs.IsAlreadyExists(err) {
-	// 		return nil, errors.Wrap(err, "commit to content store")
-	// 	}
-	// }
-	// if err := cw.Close(); err != nil {
-	// 	return nil, errors.Wrap(err, "close content store writer")
-	// }
-
-	// info, err := cs.Info(ctx, compressedDgst)
-	// if err != nil {
-	// 	return nil, errors.Wrap(err, "get info from content store")
-	// }
-
-	// blobIDsBytes, err := json.Marshal(blobIDs)
-	// if err != nil {
-	// 	return nil, errors.Wrap(err, "marshal blob ids")
-	// }
-
-	// desc := ocispecs.Descriptor{
-	// 	Digest:    compressedDgst,
-	// 	Size:      info.Size,
-	// 	MediaType: ocispecs.MediaTypeImageLayerGzip,
-	// 	Annotations: map[string]string{
-	// 		utils.LayerAnnotationUncompressed:   uncompressedDgst.Digest().String(),
-	// 		utils.LayerAnnotationNydusFsVersion: fsVersion,
-	// 		// Use this annotation to identify nydus bootstrap layer.
-	// 		nydusify.LayerAnnotationNydusBootstrap: "true",
-	// 		// Track all blob digests for nydus snapshotter.
-	// 		nydusify.LayerAnnotationNydusBlobIDs: string(blobIDsBytes),
-	// 	},
-	// }
 
 	return &ocispec.Descriptor{}, nil
 }
