@@ -44,7 +44,7 @@ var _ snapshots.Snapshotter = &snapshotter{}
 
 type snapshotter struct {
 	context              context.Context
-	containerdSockPath   string
+	acceldConfigPath     string
 	root                 string
 	nydusdPath           string
 	ms                   *storage.MetaStore
@@ -163,7 +163,7 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 
 	return &snapshotter{
 		context:              ctx,
-		containerdSockPath:   cfg.ContainerdSockPath,
+		acceldConfigPath:     cfg.AcceldConfigPath,
 		root:                 cfg.RootDir,
 		nydusdPath:           cfg.NydusdBinaryPath,
 		ms:                   ms,
@@ -290,8 +290,8 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 		}
 
 		// Download OCI and convert to nydus
-		if o.containerdSockPath != "" {
-			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels)
+		if ok, _, _, _ := o.fs.SupportStargz(ctx, base.Labels); !ok && o.acceldConfigPath != "" && !o.fs.Support(ctx, base.Labels) && !o.fs.SupportMeta(ctx, base.Labels) {
+			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels, o.acceldConfigPath)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
 			} else {

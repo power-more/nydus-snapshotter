@@ -17,6 +17,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/pkg/errors"
@@ -47,8 +48,8 @@ type LocalHandler struct {
 	cvt converter.Converter
 }
 
-func NewLocalHandler(cfg *config.Config) (*LocalHandler, error) {
-	cvt, err := converter.NewLocalConverter(cfg)
+func NewLocalHandler(cfg *config.Config, bootstrap *os.File) (*LocalHandler, error) {
+	cvt, err := converter.NewLocalConverter(cfg, bootstrap)
 	if err != nil {
 		return nil, errors.Wrap(err, "create converter")
 	}
