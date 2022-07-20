@@ -50,9 +50,10 @@ type Driver struct {
 	chunkDictRef  string
 	mergeManifest bool
 	backend       backend.Backend
+	bootstrap     *os.File
 }
 
-func New(cfg map[string]string) (*Driver, error) {
+func New(cfg map[string]string, bootstrap *os.File) (*Driver, error) {
 	workDir := cfg["work_dir"]
 	if workDir == "" {
 		workDir = os.TempDir()
@@ -107,6 +108,7 @@ func New(cfg map[string]string) (*Driver, error) {
 		chunkDictRef:  chunkDictRef,
 		mergeManifest: mergeManifest,
 		backend:       _backend,
+		bootstrap:     bootstrap,
 	}, nil
 }
 
@@ -153,7 +155,7 @@ func (d *Driver) convert(ctx context.Context, provider accelcontent.Provider) (*
 
 	var labels map[string]string
 
-	convert := func(manifestDesc ocispec.Descriptor) (*ocispec.Descriptor, error) {
+	mergenyduslayers := func(manifestDesc ocispec.Descriptor) (*ocispec.Descriptor, error) {
 		var manifest ocispec.Manifest
 		labels, err = utils.ReadJSON(ctx, cs, &manifest, manifestDesc)
 		if err != nil {
@@ -165,7 +167,7 @@ func (d *Driver) convert(ctx context.Context, provider accelcontent.Provider) (*
 			BuilderPath:   d.builderPath,
 			WorkDir:       d.workDir,
 			ChunkDictPath: bootstrapPath,
-		}, d.fsVersion)
+		}, d.fsVersion, d.bootstrap)
 		if err != nil {
 			return nil, errors.Wrap(err, "merge nydus layers")
 		}
@@ -214,7 +216,7 @@ func (d *Driver) convert(ctx context.Context, provider accelcontent.Provider) (*
 
 	switch desc.MediaType {
 	case ocispec.MediaTypeImageManifest:
-		newManifestDesc, err := convert(*desc)
+		newManifestDesc, err := mergenyduslayers(*desc)
 		if err != nil {
 			return nil, errors.Wrapf(err, "convert manifest %s", desc.Digest)
 		}
@@ -229,7 +231,7 @@ func (d *Driver) convert(ctx context.Context, provider accelcontent.Provider) (*
 		}
 
 		for idx, manifestDesc := range index.Manifests {
-			newManifestDesc, err := convert(manifestDesc)
+			newManifestDesc, err := mergenyduslayers(manifestDesc)
 			if err != nil {
 				return nil, errors.Wrapf(err, "convert manifest %s", manifestDesc.Digest)
 			}

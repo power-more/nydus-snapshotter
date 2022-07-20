@@ -17,6 +17,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"os"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
@@ -45,10 +46,10 @@ type Driver interface {
 	Version() string
 }
 
-func NewLocalDriver(cfg *config.DriverConfig) (Driver, error) {
+func NewLocalDriver(cfg *config.DriverConfig, bootstrap *os.File) (Driver, error) {
 	switch cfg.Type {
 	case "nydus":
-		return nydus.New(cfg.Config)
+		return nydus.New(cfg.Config, bootstrap)
 	case "estargz":
 		return estargz.New(cfg.Config)
 	default:
