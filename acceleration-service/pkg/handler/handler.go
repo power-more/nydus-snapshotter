@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
@@ -48,8 +49,8 @@ type LocalHandler struct {
 	cvt converter.Converter
 }
 
-func NewLocalHandler(cfg *config.Config, bootstrap *os.File) (*LocalHandler, error) {
-	cvt, err := converter.NewLocalConverter(cfg, bootstrap)
+func NewLocalHandler(cfg *config.Config) (*LocalHandler, error) {
+	cvt, err := converter.NewLocalConverter(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "create converter")
 	}
@@ -75,12 +76,20 @@ func (handler *LocalHandler) Auth(ctx context.Context, host string, authHeader s
 	return nil
 }
 
-func (handler *LocalHandler) Convert(ctx context.Context, ref string, sync bool) error {
-	return handler.cvt.Dispatch(ctx, ref, sync)
+func (handler *LocalHandler) Convert(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool) error {
+	return handler.cvt.Dispatch(ctx, ref, manifestDigest, layerDigest, blob, sync)
 }
 
 func (handler *LocalHandler) CheckHealth(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
 	defer cancel()
 	return handler.cvt.CheckHealth(ctx)
+}
+
+func (handler *LocalHandler) GetConfig() *config.Config {
+	return handler.cfg
+}
+
+func (handler *LocalHandler) Merge(ctx context.Context, blobs []string, bootstrap *os.File) error {
+	return handler.cvt.Merge(ctx, blobs, bootstrap)
 }

@@ -21,17 +21,20 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
+	containerdcontent "github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/pkg/cri/constants"
 	"github.com/containerd/containerd/snapshots"
+	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/content"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver"
-	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/errdefs"
+	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus/utils"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/metrics"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/task"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 var logger = logrus.WithField("module", "converter")
@@ -41,7 +44,9 @@ type Converter interface {
 	// by specifying source image reference, the conversion is
 	// asynchronous, and if the sync option is specified,
 	// Dispatch will be blocked until the conversion is complete.
-	Dispatch(ctx context.Context, ref string, sync bool) error
+	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool) error
+
+	Merge(ctx context.Context, blobs []string, bootstrap *os.File) error
 	// CheckHealth checks the containerd client can successfully
 	// connect to the containerd daemon and the healthcheck service
 	// returns the SERVING response.
@@ -55,9 +60,12 @@ type LocalConverter struct {
 	client      *containerd.Client
 	snapshotter snapshots.Snapshotter
 	driver      driver.Driver
+	pvd         content.Provider
+	// key is manifest digest, value is layers' descriptors (manifest.Layers)
+	manifestLayersMap map[digest.Digest][]ocispec.Descriptor
 }
 
-func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter, error) {
+func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
 	client, err := containerd.New(
 		cfg.Provider.Containerd.Address,
 		containerd.WithDefaultNamespace(constants.K8sContainerdNamespace),
@@ -68,7 +76,7 @@ func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter,
 
 	snapshotter := client.SnapshotService(cfg.Provider.Containerd.Snapshotter)
 
-	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver, bootstrap)
+	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver)
 	if err != nil {
 		return nil, errors.Wrap(err, "create driver")
 	}
@@ -82,67 +90,94 @@ func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter,
 		items: cfg.Converter.Rules,
 	}
 
-	handler := &LocalConverter{
-		cfg:         cfg,
-		rule:        rule,
-		worker:      worker,
-		client:      client,
-		snapshotter: snapshotter,
-		driver:      driver,
+	pvd, err := content.NewLocalProvider(
+		&cfg.Provider, client, snapshotter,
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "create content provider")
 	}
 
-	return handler, nil
+	localConverter := &LocalConverter{
+		cfg:               cfg,
+		rule:              rule,
+		worker:            worker,
+		client:            client,
+		snapshotter:       snapshotter,
+		driver:            driver,
+		pvd:               pvd,
+		manifestLayersMap: make(map[digest.Digest][]ocispec.Descriptor),
+	}
+
+	return localConverter, nil
 }
 
-func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
+func (cvt *LocalConverter) Merge(ctx context.Context, blobs []string, bootstrap *os.File) error {
+	return cvt.driver.Merge(ctx, cvt.pvd, blobs, bootstrap)
+}
+
+func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File) error {
 	ctx, done, err := cvt.client.WithLease(ctx)
 	if err != nil {
 		return errors.Wrap(err, "create lease")
 	}
 	defer done(ctx)
 
-	target, err := cvt.rule.Map(source)
-	if err != nil {
-		if errors.Is(err, errdefs.ErrAlreadyConverted) {
-			logrus.Infof("image has been converted: %s", source)
-			return nil
+	descs, ok := cvt.manifestLayersMap[manifestDigest]
+	// the first layer
+	if !ok {
+		// check content if current layer exist
+		logger.Infof("pulling image %s", source)
+		start := time.Now()
+		if err := cvt.pvd.Pull(ctx, source); err != nil {
+			return errors.Wrap(err, "pull image")
 		}
-		return errors.Wrap(err, "create target reference by rule")
+		logger.Infof("pulled image %s, elapse %s", source, time.Since(start))
+
+		manifest, err := utils.GetManifestbyDigest(ctx, cvt.pvd.ContentStore(), manifestDigest, cvt.pvd.Image().Target())
+		if err != nil {
+			return err
+		}
+		descs, err = utils.GetLayersbyManifestDescriptor(ctx, cvt.pvd.ContentStore(), *manifest)
+		if err != nil {
+			return err
+		}
+		cvt.manifestLayersMap[manifestDigest] = descs
 	}
 
-	content, err := content.NewLocalProvider(
-		&cvt.cfg.Provider, cvt.client, cvt.snapshotter,
-	)
-	if err != nil {
-		return errors.Wrap(err, "create content provider")
+	var islastlayer bool = false
+	for i, layerDesc := range descs {
+		if layerDesc.Digest != currentLayerDigest {
+			continue
+		}
+		if i == len(descs)-1 {
+			islastlayer = true
+		}
+
+		// if cvt.cfg.Converter.Async, go routine
+		logger.Infof("converting layer %s in image %s", currentLayerDigest, source)
+		start := time.Now()
+		if _, err := cvt.driver.Convert(ctx, cvt.pvd, layerDesc, blob); err != nil {
+			return errors.Wrap(err, "converting layer")
+		}
+		logger.Infof("converted layer %s in image %s, elapse %s", currentLayerDigest, source, time.Since(start))
+		break
 	}
 
-	logger.Infof("pulling image %s", source)
-	start := time.Now()
-	if err := content.Pull(ctx, source); err != nil {
-		return errors.Wrap(err, "pull image")
+	if cvt.cfg.Converter.Async && islastlayer {
+		// wait group
 	}
-	logger.Infof("pulled image %s, elapse %s", source, time.Since(start))
-
-	logger.Infof("converting image %s", source)
-	start = time.Now()
-	_, err = cvt.driver.Convert(ctx, content)
-	if err != nil {
-		return errors.Wrap(err, "convert image")
-	}
-	logger.Infof("converted image %s, elapse %s", target, time.Since(start))
 
 	return nil
 }
 
-func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, sync bool) error {
+func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool) error {
 	taskID := task.Manager.Create(ref)
 
 	if sync {
 		// FIXME: The synchronous conversion task should also be
 		// executed in a limited worker queue.
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(ctx, ref)
+			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
@@ -150,7 +185,7 @@ func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, sync bool) 
 
 	cvt.worker.Dispatch(func() error {
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(context.Background(), ref)
+			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
@@ -172,4 +207,8 @@ func (cvt *LocalConverter) CheckHealth(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (cvt *LocalConverter) GetContentStore() containerdcontent.Store {
+	return cvt.pvd.ContentStore()
 }

@@ -26,8 +26,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
-	acceldConfig "github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
-	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/handler"
 	"github.com/containerd/nydus-snapshotter/config"
 	"github.com/containerd/nydus-snapshotter/pkg/auth"
 	"github.com/containerd/nydus-snapshotter/pkg/cache"
@@ -59,7 +57,6 @@ const (
 )
 
 var nativeEndian binary.ByteOrder
-var SourceSet map[string]bool = make(map[string]bool)
 
 type Mode int
 
@@ -110,7 +107,7 @@ type Filesystem struct {
 	logToStdout          bool
 	vpcRegistry          bool
 	mode                 Mode
-	imageMode            ImageMode
+	ImageMode            ImageMode
 }
 
 // NewFileSystem initialize Filesystem instance
@@ -122,7 +119,7 @@ func NewFileSystem(ctx context.Context, opt ...NewFSOpt) (*Filesystem, error) {
 			return nil, err
 		}
 	}
-	if fs.imageMode == PreLoad {
+	if fs.ImageMode == PreLoad {
 		fs.blobMgr = NewBlobManager(fs.daemonCfg.Device.Backend.Config.Dir)
 		go func() {
 			err := fs.blobMgr.Run(ctx)
@@ -157,7 +154,7 @@ func (fs *Filesystem) PrepareBlobLayer(ctx context.Context, snapshot storage.Sna
 		log.G(ctx).Infof("total nydus prepare data layer duration %d ms", duration.Milliseconds())
 	}()
 
-	ref, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return fmt.Errorf("can not find ref and digest from label %+v", labels)
 	}
@@ -247,7 +244,7 @@ func (fs *Filesystem) SupportStargz(ctx context.Context, labels map[string]strin
 	if !fs.StargzEnabled() {
 		return false, "", "", nil
 	}
-	ref, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return false, "", "", nil
 	}
@@ -459,84 +456,6 @@ func (fs *Filesystem) PrepareStargzMetaLayer(ctx context.Context, blob *stargz.B
 
 func (fs *Filesystem) StargzLayer(labels map[string]string) bool {
 	return labels[label.StargzLayer] != ""
-}
-
-func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, cfgpath string) error {
-	if fs.imageMode != PreLoad {
-		return nil
-	}
-
-	// FIXME: due to blob and image.boot are not in db, if rm blob or rm snapshot with image.boot, restart failed
-	// SourceSet must be changed.
-
-	// s, err := storage.GetSnapshot(ctx, key)
-	// if err != nil {
-	// 	return nil, errors.Wrap(err, "failed to get active mount")
-	// }
-
-	source, _ := registry.ParseLabels(labels)
-	if source == "" {
-		return fmt.Errorf("can not find ref and digest from label %+v", labels)
-	}
-	if _, ok := SourceSet[source]; ok {
-		log.G(ctx).Infof("%s has been converted to nydus", source)
-		return nil
-	}
-
-	start := time.Now()
-	defer func() {
-		duration := time.Since(start)
-		log.G(ctx).Infof("total oci downloading and converting to nydus layer duration %d ms", duration.Milliseconds())
-	}()
-
-	workdir := filepath.Join(fs.UpperPath(s.ID), BootstrapFile)
-	err := os.Mkdir(filepath.Dir(workdir), 0755)
-	if err != nil {
-		return errors.Wrap(err, "failed to create bootstrap dir")
-	}
-	nydusBootstrap, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
-	if err != nil {
-		return errors.Wrap(err, "failed to create bootstrap file")
-	}
-
-	// defer func() {
-	// 	closeEmptyFile := []struct {
-	// 		file *os.File
-	// 		path string
-	// 	}{
-	// 		{
-	// 			file: nydusBootstrap,
-	// 			path: workdir,
-	// 		},
-	// 	}
-	// 	for _, in := range closeEmptyFile {
-	// 		size, err := in.file.Seek(0, io.SeekEnd)
-	// 		if err != nil {
-	// 			log.G(ctx).Warnf("failed to seek bootstrap %s file, error %s", workdir, err)
-	// 		}
-	// 		in.file.Close()
-	// 		if size == 0 {
-	// 			os.Remove(in.path)
-	// 		}
-	// 	}
-	// }()
-
-	cfg, err := acceldConfig.Parse(cfgpath)
-	if err != nil {
-		return err
-	}
-	handler, err := handler.NewLocalHandler(cfg, nydusBootstrap)
-	if err != nil {
-		return err
-	}
-
-	if err = handler.Convert(context.Background(), source, true); err == nil {
-		SourceSet[source] = true
-		labels[label.NydusMetaLayer] = "true"
-		return nil
-	} else {
-		return err
-	}
 }
 
 func (fs *Filesystem) Support(ctx context.Context, labels map[string]string) bool {
