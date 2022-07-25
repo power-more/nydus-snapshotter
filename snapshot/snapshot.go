@@ -27,6 +27,7 @@ import (
 	metrics "github.com/containerd/nydus-snapshotter/pkg/metric"
 	"github.com/containerd/nydus-snapshotter/pkg/store"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/nydus-snapshotter/config"
 	fspkg "github.com/containerd/nydus-snapshotter/pkg/filesystem/fs"
@@ -271,10 +272,8 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			if err == nil || errdefs.IsAlreadyExists(err) {
 				return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
 			}
-		}
-
-		// Check if image layer is estargz layer
-		if ok, ref, layerDigest, blob := o.fs.SupportStargz(ctx, base.Labels); ok {
+		} else if ok, ref, layerDigest, blob := o.fs.SupportStargz(ctx, base.Labels); ok {
+			// Check if image layer is estargz layer
 			err = o.fs.PrepareStargzMetaLayer(ctx, blob, ref, layerDigest, s, base.Labels)
 			if err != nil {
 				logCtx.Errorf("prepare stargz layer of snapshot ID %s, err: %v", s.ID, err)
@@ -287,10 +286,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
 				}
 			}
-		}
-
-		// Download OCI and convert to nydus
-		if ok, _, _, _ := o.fs.SupportStargz(ctx, base.Labels); !ok && o.acceldConfigPath != "" && !o.fs.Support(ctx, base.Labels) && !o.fs.SupportMeta(ctx, base.Labels) {
+		} else if o.acceldConfigPath != "" {
 			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels, o.acceldConfigPath)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
@@ -530,10 +526,14 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create prepare snapshot dir")
 	}
 
+	logrus.Info("====zhaoshang CreateSnapshot=====  %#v ", key)
 	s, err := storage.CreateSnapshot(ctx, kind, key, parent, opts...)
 	if err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create snapshot")
 	}
+
+	s1, err := storage.GetSnapshot(ctx, key)
+	logrus.Info("====zhaoshang GetSnapshot=====  %#v ", s1)
 
 	if len(s.ParentIDs) > 0 {
 		st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
