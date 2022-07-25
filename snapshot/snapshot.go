@@ -27,7 +27,6 @@ import (
 	metrics "github.com/containerd/nydus-snapshotter/pkg/metric"
 	"github.com/containerd/nydus-snapshotter/pkg/store"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/nydus-snapshotter/config"
 	fspkg "github.com/containerd/nydus-snapshotter/pkg/filesystem/fs"
@@ -286,7 +285,8 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
 				}
 			}
-		} else if o.acceldConfigPath != "" {
+		} else if o.acceldConfigPath != "" && o.fs.ImageMode == fspkg.PreLoad {
+			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
 			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels, o.acceldConfigPath)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
@@ -526,14 +526,10 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create prepare snapshot dir")
 	}
 
-	logrus.Info("====zhaoshang CreateSnapshot=====  %#v ", key)
 	s, err := storage.CreateSnapshot(ctx, kind, key, parent, opts...)
 	if err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create snapshot")
 	}
-
-	s1, err := storage.GetSnapshot(ctx, key)
-	logrus.Info("====zhaoshang GetSnapshot=====  %#v ", s1)
 
 	if len(s.ParentIDs) > 0 {
 		st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
