@@ -286,7 +286,8 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
 				}
 			}
-		} else if o.acceldConfigPath != "" {
+		} else if o.acceldConfigPath != "" && o.fs.ImageMode == fspkg.PreLoad {
+			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
 			log.G(ctx).Info("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
 			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels, o.acceldConfigPath)
 			if err != nil {

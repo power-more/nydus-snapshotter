@@ -110,7 +110,7 @@ type Filesystem struct {
 	logToStdout          bool
 	vpcRegistry          bool
 	mode                 Mode
-	imageMode            ImageMode
+	ImageMode            ImageMode
 }
 
 // NewFileSystem initialize Filesystem instance
@@ -122,7 +122,7 @@ func NewFileSystem(ctx context.Context, opt ...NewFSOpt) (*Filesystem, error) {
 			return nil, err
 		}
 	}
-	if fs.imageMode == PreLoad {
+	if fs.ImageMode == PreLoad {
 		fs.blobMgr = NewBlobManager(fs.daemonCfg.Device.Backend.Config.Dir)
 		go func() {
 			err := fs.blobMgr.Run(ctx)
@@ -462,10 +462,6 @@ func (fs *Filesystem) StargzLayer(labels map[string]string) bool {
 }
 
 func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, cfgpath string) error {
-	if fs.imageMode != PreLoad {
-		return nil
-	}
-
 	// FIXME: due to blob and image.boot are not in db, if rm blob or rm snapshot with image.boot, restart failed
 	// SourceSet must be changed.
 
