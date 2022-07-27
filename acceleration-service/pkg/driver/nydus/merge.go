@@ -14,68 +14,51 @@
 
 package nydus
 
-import (
-	"context"
-	"io"
-	"os"
+// func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispec.Descriptor, opt nydusify.MergeOption, fsVersion string) (*ocispec.Descriptor, error) {
+// 	// Extracts nydus bootstrap from nydus format for each layer.
+// 	layers := []nydusify.Layer{}
 
-	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/log"
-	nydusify "github.com/containerd/nydus-snapshotter/pkg/converter"
-	"github.com/opencontainers/go-digest"
-	"github.com/opencontainers/image-spec/identity"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pkg/errors"
-)
+// 	var chainID digest.Digest
+// 	for _, blobDesc := range descs {
+// 		ra, err := cs.ReaderAt(ctx, blobDesc)
+// 		if err != nil {
+// 			return nil, errors.Wrapf(err, "get reader for blob %q", blobDesc.Digest)
+// 		}
+// 		defer ra.Close()
+// 		layers = append(layers, nydusify.Layer{
+// 			Digest:   blobDesc.Digest,
+// 			ReaderAt: ra,
+// 		})
+// 		if chainID == "" {
+// 			chainID = identity.ChainID([]digest.Digest{blobDesc.Digest})
+// 		} else {
+// 			chainID = identity.ChainID([]digest.Digest{chainID, blobDesc.Digest})
+// 		}
+// 	}
 
-func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.Descriptor, opt nydusify.MergeOption, fsVersion string, bootstrap *os.File) (*ocispec.Descriptor, error) {
-	// Extracts nydus bootstrap from nydus format for each layer.
-	layers := []nydusify.Layer{}
+// 	// Merge all nydus bootstraps into a final nydus bootstrap.
+// 	pr, pw := io.Pipe()
+// 	go func() {
+// 		defer pw.Close()
+// 		if err := nydusify.Merge(ctx, layers, pw, opt); err != nil {
+// 			pw.CloseWithError(errors.Wrapf(err, "merge nydus bootstrap"))
+// 		}
+// 	}()
 
-	var chainID digest.Digest
-	for _, blobDesc := range descs {
-		ra, err := cs.ReaderAt(ctx, blobDesc)
-		if err != nil {
-			return nil, errors.Wrapf(err, "get reader for blob %q", blobDesc.Digest)
-		}
-		defer ra.Close()
-		layers = append(layers, nydusify.Layer{
-			Digest:   blobDesc.Digest,
-			ReaderAt: ra,
-		})
-		if chainID == "" {
-			chainID = identity.ChainID([]digest.Digest{blobDesc.Digest})
-		} else {
-			chainID = identity.ChainID([]digest.Digest{chainID, blobDesc.Digest})
-		}
-	}
+// 	// Compress final nydus bootstrap to tar.gz and write into content store.
+// 	var cw = bootstrap
+// 	defer cw.Close()
 
-	// Merge all nydus bootstraps into a final nydus bootstrap.
-	pr, pw := io.Pipe()
-	go func() {
-		defer pw.Close()
-		if err := nydusify.Merge(ctx, layers, pw, nydusify.MergeOption{
-			WithTar: false,
-		}); err != nil {
-			pw.CloseWithError(errors.Wrapf(err, "merge nydus bootstrap"))
-		}
-	}()
+// 	uncompressedDgst := digest.SHA256.Digester()
+// 	uncompressed := io.MultiWriter(cw, uncompressedDgst.Hash())
+// 	if _, err := io.Copy(uncompressed, pr); err != nil {
+// 		log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) fail =====  %#+v ", uncompressed)
+// 		return nil, errors.Wrapf(err, "copy uncompressed bootstrap into %s", bootstrap.Name())
+// 	}
+// 	log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) success =====  %#+v ", uncompressed)
+// 	if err := cw.Close(); err != nil {
+// 		return nil, errors.Wrap(err, "close gzip writer")
+// 	}
 
-	// Compress final nydus bootstrap to tar.gz and write into content store.
-	var cw = bootstrap
-	defer cw.Close()
-
-	uncompressedDgst := digest.SHA256.Digester()
-	uncompressed := io.MultiWriter(cw, uncompressedDgst.Hash())
-	if _, err := io.Copy(uncompressed, pr); err != nil {
-		log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) fail =====  %#+v ", uncompressed)
-		return nil, errors.Wrapf(err, "copy uncompressed bootstrap into %s", bootstrap.Name())
-	}
-	log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) success =====  %#+v ", uncompressed)
-	if err := cw.Close(); err != nil {
-		return nil, errors.Wrap(err, "close gzip writer")
-	}
-
-	return &ocispec.Descriptor{}, nil
-}
+// 	return &ocispec.Descriptor{}, nil
+// }

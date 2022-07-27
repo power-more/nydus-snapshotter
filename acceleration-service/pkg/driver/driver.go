@@ -23,7 +23,6 @@ import (
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/content"
-	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/estargz"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus"
 )
 
@@ -35,7 +34,7 @@ type Driver interface {
 	// content store and so on. If conversion successful, the
 	// converted image manifest will be returned, otherwise a
 	// non-nil error will be returned.
-	Convert(context.Context, content.Provider) (*ocispec.Descriptor, error)
+	Convert(context.Context, content.Provider, ocispec.Descriptor, *os.File) (*ocispec.Descriptor, error)
 
 	// Name gets the driver type name, it is used to identify
 	// different accelerated image formats.
@@ -46,12 +45,10 @@ type Driver interface {
 	Version() string
 }
 
-func NewLocalDriver(cfg *config.DriverConfig, bootstrap *os.File) (Driver, error) {
+func NewLocalDriver(cfg *config.DriverConfig) (Driver, error) {
 	switch cfg.Type {
 	case "nydus":
-		return nydus.New(cfg.Config, bootstrap)
-	case "estargz":
-		return estargz.New(cfg.Config)
+		return nydus.New(cfg.Config)
 	default:
 		return nil, fmt.Errorf("unsupported driver %s", cfg.Type)
 	}

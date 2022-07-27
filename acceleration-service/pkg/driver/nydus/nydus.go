@@ -22,13 +22,11 @@ import (
 	"strconv"
 
 	"github.com/containerd/containerd/content"
-	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/images/converter"
 	"github.com/containerd/containerd/platforms"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus/backend"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus/parser"
 	nydusify "github.com/containerd/nydus-snapshotter/pkg/converter"
-	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -50,10 +48,9 @@ type Driver struct {
 	chunkDictRef  string
 	mergeManifest bool
 	backend       backend.Backend
-	bootstrap     *os.File
 }
 
-func New(cfg map[string]string, bootstrap *os.File) (*Driver, error) {
+func New(cfg map[string]string) (*Driver, error) {
 	workDir := cfg["work_dir"]
 	if workDir == "" {
 		workDir = os.TempDir()
@@ -108,7 +105,6 @@ func New(cfg map[string]string, bootstrap *os.File) (*Driver, error) {
 		chunkDictRef:  chunkDictRef,
 		mergeManifest: mergeManifest,
 		backend:       _backend,
-		bootstrap:     bootstrap,
 	}, nil
 }
 
@@ -120,137 +116,157 @@ func (d *Driver) Version() string {
 	return ""
 }
 
-func (d *Driver) Convert(ctx context.Context, provider accelcontent.Provider) (*ocispec.Descriptor, error) {
-	desc, err := d.convert(ctx, provider)
-	if d.mergeManifest {
-		return d.makeManifestIndex(ctx, provider.ContentStore(), provider.Image().Target(), *desc)
-	}
-	return desc, err
-}
-
-func (d *Driver) convert(ctx context.Context, provider accelcontent.Provider) (*ocispec.Descriptor, error) {
+func (d *Driver) Convert(ctx context.Context, provider accelcontent.Provider, layerDesc ocispec.Descriptor, blob *os.File) (*ocispec.Descriptor, error) {
 	cs := provider.ContentStore()
 
-	bootstrapPath := ""
+	chunkDictPath := ""
 	if d.chunkDictRef != "" {
 		chunkDictInfo, err := d.getChunkDict(ctx, provider)
 		if err != nil {
 			return nil, errors.Wrap(err, "get chunk dict info")
 		}
-		bootstrapPath = chunkDictInfo.BootstrapPath
+		chunkDictPath = chunkDictInfo.BootstrapPath
 	}
 
-	desc, err := converter.DefaultIndexConvertFunc(convertToNydusLayer(nydusify.PackOption{
+	_, err := converter.DefaultIndexConvertFunc(convertToNydusLayer(nydusify.PackOption{
 		FsVersion:     d.fsVersion,
 		Compressor:    d.compressor,
 		BuilderPath:   d.builderPath,
 		WorkDir:       d.workDir,
-		ChunkDictPath: bootstrapPath,
-	}, d.backend), true, platforms.All)(
-		ctx, cs, provider.Image().Target(),
+		ChunkDictPath: chunkDictPath,
+	}, d.backend, blob), true, platforms.All)(
+		ctx, cs, layerDesc,
 	)
 	if err != nil {
-		return nil, errors.Wrap(err, "convert to nydus image")
+		return nil, errors.Wrap(err, "convert oci layer to nydus blob")
 	}
-
-	var labels map[string]string
-
-	mergenyduslayers := func(manifestDesc ocispec.Descriptor) (*ocispec.Descriptor, error) {
-		var manifest ocispec.Manifest
-		labels, err = utils.ReadJSON(ctx, cs, &manifest, manifestDesc)
-		if err != nil {
-			return nil, errors.Wrap(err, "read manifest json")
-		}
-
-		// Append bootstrap layer to manifest.
-		bootstrapDesc, err := mergeNydusLayers(ctx, cs, manifest.Layers, nydusify.MergeOption{
-			BuilderPath:   d.builderPath,
-			WorkDir:       d.workDir,
-			ChunkDictPath: bootstrapPath,
-		}, d.fsVersion, d.bootstrap)
-		if err != nil {
-			return nil, errors.Wrap(err, "merge nydus layers")
-		}
-		bootstrapDiffID := digest.Digest(bootstrapDesc.Annotations[nydusutils.LayerAnnotationUncompressed])
-
-		if d.backend != nil {
-			// Only append nydus bootstrap layer into manifest, and do not put nydus
-			// blob layer into manifest if blob storage backend is specified.
-			manifest.Layers = []ocispec.Descriptor{*bootstrapDesc}
-		} else {
-			manifest.Layers = append(manifest.Layers, *bootstrapDesc)
-		}
-
-		// Remove useless annotation.
-		for _, layer := range manifest.Layers {
-			delete(layer.Annotations, nydusutils.LayerAnnotationUncompressed)
-		}
-
-		// Update diff ids in image config.
-		var config ocispec.Image
-		labels, err = utils.ReadJSON(ctx, cs, &config, manifest.Config)
-		if err != nil {
-			return nil, errors.Wrap(err, "read image config")
-		}
-		if d.backend != nil {
-			config.RootFS.DiffIDs = []digest.Digest{bootstrapDiffID}
-		} else {
-			config.RootFS.DiffIDs = append(config.RootFS.DiffIDs, bootstrapDiffID)
-		}
-
-		// Update image config in content store.
-		newConfigDesc, err := utils.WriteJSON(ctx, cs, config, manifest.Config, "", labels)
-		if err != nil {
-			return nil, errors.Wrap(err, "write image config")
-		}
-		manifest.Config = *newConfigDesc
-
-		// Update image manifest in content store.
-		newManifestDesc, err := utils.WriteJSON(ctx, cs, manifest, manifestDesc, "", labels)
-		if err != nil {
-			return nil, errors.Wrap(err, "write manifest")
-		}
-
-		return newManifestDesc, nil
-	}
-
-	switch desc.MediaType {
-	case ocispec.MediaTypeImageManifest:
-		newManifestDesc, err := mergenyduslayers(*desc)
-		if err != nil {
-			return nil, errors.Wrapf(err, "convert manifest %s", desc.Digest)
-		}
-
-		return newManifestDesc, nil
-
-	case ocispec.MediaTypeImageIndex:
-		var index ocispec.Index
-		labels, err = utils.ReadJSON(ctx, cs, &index, *desc)
-		if err != nil {
-			return nil, errors.Wrap(err, "read manifest index")
-		}
-
-		for idx, manifestDesc := range index.Manifests {
-			newManifestDesc, err := mergenyduslayers(manifestDesc)
-			if err != nil {
-				return nil, errors.Wrapf(err, "convert manifest %s", manifestDesc.Digest)
-			}
-			index.Manifests[idx] = *newManifestDesc
-		}
-
-		newIndexDesc, err := utils.WriteJSON(ctx, cs, index, *desc, "", labels)
-		if err != nil {
-			return nil, errors.Wrap(err, "write manifest index")
-		}
-
-		return newIndexDesc, nil
-
-	case images.MediaTypeDockerSchema2Manifest, images.MediaTypeDockerSchema2ManifestList:
-		return nil, fmt.Errorf("not support docker manifest")
-	}
-
-	return nil, fmt.Errorf("invalid media type %s", desc.MediaType)
+	return nil, nil
 }
+
+// func (d *Driver) convert(ctx context.Context, provider accelcontent.Provider, layerDesc ocispec.Descriptor) (*ocispec.Descriptor, error) {
+// 	cs := provider.ContentStore()
+
+// 	chunkDictPath := ""
+// 	if d.chunkDictRef != "" {
+// 		chunkDictInfo, err := d.getChunkDict(ctx, provider)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "get chunk dict info")
+// 		}
+// 		chunkDictPath = chunkDictInfo.BootstrapPath
+// 	}
+
+// 	desc, err := converter.DefaultIndexConvertFunc(convertToNydusLayer(nydusify.PackOption{
+// 		FsVersion:     d.fsVersion,
+// 		Compressor:    d.compressor,
+// 		BuilderPath:   d.builderPath,
+// 		WorkDir:       d.workDir,
+// 		ChunkDictPath: chunkDictPath,
+// 	}, d.backend), true, platforms.All)(
+// 		ctx, cs, provider.Image().Target(),
+// 	)
+// 	if err != nil {
+// 		return nil, errors.Wrap(err, "convert to nydus image")
+// 	}
+
+// 	var labels map[string]string
+
+// 	mergenyduslayers := func(manifestDesc ocispec.Descriptor) (*ocispec.Descriptor, error) {
+// 		var manifest ocispec.Manifest
+// 		labels, err = utils.ReadJSON(ctx, cs, &manifest, manifestDesc)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "read manifest json")
+// 		}
+
+// 		// Append bootstrap layer to manifest.
+// 		bootstrapDesc, err := mergeNydusLayers(ctx, cs, manifest.Layers, nydusify.MergeOption{
+// 			BuilderPath:   d.builderPath,
+// 			WorkDir:       d.workDir,
+// 			ChunkDictPath: chunkDictPath,
+// 			WithTar:       false,
+// 		}, d.fsVersion)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "merge nydus layers")
+// 		}
+// 		bootstrapDiffID := digest.Digest(bootstrapDesc.Annotations[nydusutils.LayerAnnotationUncompressed])
+
+// 		if d.backend != nil {
+// 			// Only append nydus bootstrap layer into manifest, and do not put nydus
+// 			// blob layer into manifest if blob storage backend is specified.
+// 			manifest.Layers = []ocispec.Descriptor{*bootstrapDesc}
+// 		} else {
+// 			manifest.Layers = append(manifest.Layers, *bootstrapDesc)
+// 		}
+
+// 		// Remove useless annotation.
+// 		for _, layer := range manifest.Layers {
+// 			delete(layer.Annotations, nydusutils.LayerAnnotationUncompressed)
+// 		}
+
+// 		// Update diff ids in image config.
+// 		var config ocispec.Image
+// 		labels, err = utils.ReadJSON(ctx, cs, &config, manifest.Config)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "read image config")
+// 		}
+// 		if d.backend != nil {
+// 			config.RootFS.DiffIDs = []digest.Digest{bootstrapDiffID}
+// 		} else {
+// 			config.RootFS.DiffIDs = append(config.RootFS.DiffIDs, bootstrapDiffID)
+// 		}
+
+// 		// Update image config in content store.
+// 		newConfigDesc, err := utils.WriteJSON(ctx, cs, config, manifest.Config, "", labels)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "write image config")
+// 		}
+// 		manifest.Config = *newConfigDesc
+
+// 		// Update image manifest in content store.
+// 		newManifestDesc, err := utils.WriteJSON(ctx, cs, manifest, manifestDesc, "", labels)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "write manifest")
+// 		}
+
+// 		return newManifestDesc, nil
+// 	}
+
+// 	switch desc.MediaType {
+// 	case ocispec.MediaTypeImageManifest:
+// 		newManifestDesc, err := mergenyduslayers(*desc)
+// 		if err != nil {
+// 			return nil, errors.Wrapf(err, "convert manifest %s", desc.Digest)
+// 		}
+
+// 		return newManifestDesc, nil
+
+// 	case ocispec.MediaTypeImageIndex:
+// 		var index ocispec.Index
+// 		labels, err = utils.ReadJSON(ctx, cs, &index, *desc)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "read manifest index")
+// 		}
+
+// 		for idx, manifestDesc := range index.Manifests {
+// 			newManifestDesc, err := mergenyduslayers(manifestDesc)
+// 			if err != nil {
+// 				return nil, errors.Wrapf(err, "convert manifest %s", manifestDesc.Digest)
+// 			}
+// 			index.Manifests[idx] = *newManifestDesc
+// 		}
+
+// 		newIndexDesc, err := utils.WriteJSON(ctx, cs, index, *desc, "", labels)
+// 		if err != nil {
+// 			return nil, errors.Wrap(err, "write manifest index")
+// 		}
+
+// 		return newIndexDesc, nil
+
+// 	case images.MediaTypeDockerSchema2Manifest, images.MediaTypeDockerSchema2ManifestList:
+// 		return nil, fmt.Errorf("not support docker manifest")
+// 	}
+
+// 	return nil, fmt.Errorf("invalid media type %s", desc.MediaType)
+// }
 
 func (d *Driver) makeManifestIndex(ctx context.Context, cs content.Store, oci, nydus ocispec.Descriptor) (*ocispec.Descriptor, error) {
 	ociDescs, err := utils.GetManifests(ctx, cs, oci)

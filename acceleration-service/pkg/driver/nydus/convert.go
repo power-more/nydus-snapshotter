@@ -16,24 +16,21 @@ package nydus
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"os"
 
 	"github.com/containerd/containerd/archive/compression"
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/images/converter"
-	"github.com/containerd/containerd/labels"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus/backend"
-	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus/utils"
 	nydusify "github.com/containerd/nydus-snapshotter/pkg/converter"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
-func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend) converter.ConvertFunc {
+func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend, blob *os.File) converter.ConvertFunc {
 	return func(ctx context.Context, cs content.Store, desc ocispec.Descriptor) (*ocispec.Descriptor, error) {
 		if !images.IsLayerType(desc.MediaType) {
 			return nil, nil
@@ -46,12 +43,13 @@ func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend) conve
 		defer ra.Close()
 		rdr := io.NewSectionReader(ra, 0, ra.Size())
 
-		ref := fmt.Sprintf("convert-nydus-from-%s", desc.Digest)
-		dst, err := content.OpenWriter(ctx, cs, content.WithRef(ref))
+		// dst, err := content.OpenWriter(ctx, cs, content.WithRef(ref))
+		uncompressedDgst := digest.SHA256.Digester()
+		compressed := io.MultiWriter(blob, uncompressedDgst.Hash())
 		if err != nil {
 			return nil, errors.Wrap(err, "open blob writer")
 		}
-		defer dst.Close()
+		defer blob.Close()
 
 		tr, err := compression.DecompressStream(rdr)
 		if err != nil {
@@ -81,52 +79,10 @@ func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend) conve
 			}
 		}()
 
-		if err := content.Copy(ctx, dst, pr, 0, ""); err != nil {
+		if _, err := io.Copy(compressed, pr); err != nil {
 			return nil, errors.Wrap(err, "copy nydus blob to content store")
 		}
 
-		blobDigest := digester.Digest()
-		logrus.Info("====zhaoshang blobDigest=====  %#+v ", blobDigest)
-		info, err := cs.Info(ctx, blobDigest)
-		if err != nil {
-			return nil, errors.Wrapf(err, "get blob info %s", blobDigest)
-		}
-		if info.Labels == nil {
-			info.Labels = map[string]string{}
-		}
-		// Write a diff id label of layer in content store for simplifying
-		// diff id calculation to speed up the conversion.
-		// See: https://github.com/containerd/containerd/blob/e4fefea5544d259177abb85b64e428702ac49c97/images/diffid.go#L49
-		info.Labels[labels.LabelUncompressed] = blobDigest.String()
-		_, err = cs.Update(ctx, info)
-		if err != nil {
-			return nil, errors.Wrap(err, "update layer label")
-		}
-
-		newDesc := ocispec.Descriptor{
-			Digest:    blobDigest,
-			Size:      info.Size,
-			MediaType: utils.MediaTypeNydusBlob,
-			Annotations: map[string]string{
-				// Use `containerd.io/uncompressed` to generate DiffID of
-				// layer defined in OCI spec.
-				utils.LayerAnnotationUncompressed: blobDigest.String(),
-				utils.LayerAnnotationNydusBlob:    "true",
-			},
-		}
-
-		if backend != nil {
-			blobRa, err := cs.ReaderAt(ctx, newDesc)
-			if err != nil {
-				return nil, errors.Wrap(err, "get nydus blob reader")
-			}
-			blobReader := io.NewSectionReader(blobRa, 0, blobRa.Size())
-
-			if err := backend.Push(ctx, blobReader, blobDigest); err != nil {
-				return nil, errors.Wrap(err, "push to storage backend")
-			}
-		}
-
-		return &newDesc, nil
+		return &ocispec.Descriptor{}, nil
 	}
 }

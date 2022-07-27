@@ -48,12 +48,15 @@ func ParseImage(imageID string) (Image, error) {
 	}, nil
 }
 
-func ParseLabels(labels map[string]string) (rRef, rDigest string) {
+func ParseLabels(labels map[string]string) (rRef, rManifest, rLayer string) {
 	if ref, ok := labels[label.CRIImageRef]; ok {
 		rRef = ref
 	}
+	if manifest, ok := labels[label.CRIManifestDigest]; ok {
+		rManifest = manifest
+	}
 	if layerDigest, ok := labels[label.CRILayerDigest]; ok {
-		rDigest = layerDigest
+		rLayer = layerDigest
 	}
 	return
 }

@@ -23,9 +23,13 @@ import (
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/storage"
 	"github.com/containerd/continuity/fs"
+	acceldConfig "github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
+	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/handler"
 	"github.com/containerd/nydus-snapshotter/pkg/cache"
 	metrics "github.com/containerd/nydus-snapshotter/pkg/metric"
 	"github.com/containerd/nydus-snapshotter/pkg/store"
+	"github.com/containerd/nydus-snapshotter/pkg/utils/registry"
+	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
@@ -45,7 +49,6 @@ var _ snapshots.Snapshotter = &snapshotter{}
 
 type snapshotter struct {
 	context              context.Context
-	acceldConfigPath     string
 	root                 string
 	nydusdPath           string
 	ms                   *storage.MetaStore
@@ -55,6 +58,7 @@ type snapshotter struct {
 	enableNydusOverlayFS bool
 	syncRemove           bool
 	cleanupOnClose       bool
+	handler              *handler.LocalHandler
 }
 
 func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshotter, error) {
@@ -162,9 +166,20 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		return nil, err
 	}
 
+	var _handler *handler.LocalHandler
+	if cfg.AcceldConfigPath != "" {
+		acceldcfg, err := acceldConfig.Parse(cfg.AcceldConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		_handler, err = handler.NewLocalHandler(acceldcfg)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &snapshotter{
 		context:              ctx,
-		acceldConfigPath:     cfg.AcceldConfigPath,
 		root:                 cfg.RootDir,
 		nydusdPath:           cfg.NydusdBinaryPath,
 		ms:                   ms,
@@ -174,6 +189,7 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		hasDaemon:            hasDaemon,
 		enableNydusOverlayFS: cfg.EnableNydusOverlayFS,
 		cleanupOnClose:       cfg.CleanupOnClose,
+		handler:              _handler,
 	}, nil
 }
 
@@ -286,10 +302,10 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
 				}
 			}
-		} else if o.acceldConfigPath != "" && o.fs.ImageMode == fspkg.PreLoad {
+		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad {
 			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
 			log.G(ctx).Info("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
-			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels, o.acceldConfigPath)
+			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
 			} else {
@@ -818,4 +834,64 @@ func (o *snapshotter) snapshotRoot() string {
 
 func (o *snapshotter) snapshotDir(id string) string {
 	return filepath.Join(o.snapshotRoot(), id)
+}
+
+func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string) error {
+
+	// start := time.Now()
+	// defer func() {
+	// 	duration := time.Since(start)
+	// 	log.G(ctx).Infof("total oci downloading and converting to nydus layer duration %d ms", duration.Milliseconds())
+	// }()
+
+	// defer func() {
+	// 	closeEmptyFile := []struct {
+	// 		file *os.File
+	// 		path string
+	// 	}{
+	// 		{
+	// 			file: nydusBootstrap,
+	// 			path: workdir,
+	// 		},
+	// 	}
+	// 	for _, in := range closeEmptyFile {
+	// 		size, err := in.file.Seek(0, io.SeekEnd)
+	// 		if err != nil {
+	// 			log.G(ctx).Warnf("failed to seek bootstrap %s file, error %s", workdir, err)
+	// 		}
+	// 		in.file.Close()
+	// 		if size == 0 {
+	// 			os.Remove(in.path)
+	// 		}
+	// 	}
+	// }()
+
+	source, manifest, layer := registry.ParseLabels(labels)
+	if manifest == "" || layer == "" {
+		return fmt.Errorf("can not find manifestDigest and layerDigest from label %+v", labels)
+	}
+	manifestDigest, err := digest.Parse(manifest)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse manifest digest")
+	}
+	layerDigest, err := digest.Parse(layer)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse current layer digest")
+	}
+
+	workdir := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], s.ID)
+	blob, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
+	if err != nil {
+		return errors.Wrap(err, "failed to open blob file")
+	}
+	logrus.Info("====zhaoshang blobfile=====  %+v", blob)
+
+	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true); err == nil {
+		labels[label.NydusMetaLayer] = "true"
+		log.G(ctx).Info("====zhaoshang success=====")
+		return nil
+	} else {
+		log.G(ctx).Info("====zhaoshang err=====  %#+v ", err)
+		return err
+	}
 }
