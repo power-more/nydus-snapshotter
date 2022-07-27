@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/pkg/cri/constants"
@@ -117,17 +118,19 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
 	}
 
 	logger.Infof("pulling image %s", source)
+	start := time.Now()
 	if err := content.Pull(ctx, source); err != nil {
 		return errors.Wrap(err, "pull image")
 	}
-	logger.Infof("pulled image %s", source)
+	logger.Infof("pulled image %s, elapse %s", source, time.Since(start))
 
 	logger.Infof("converting image %s", source)
+	start = time.Now()
 	_, err = cvt.driver.Convert(ctx, content)
 	if err != nil {
 		return errors.Wrap(err, "convert image")
 	}
-	logger.Infof("converted image %s", target)
+	logger.Infof("converted image %s, elapse %s", target, time.Since(start))
 
 	return nil
 }
