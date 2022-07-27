@@ -22,7 +22,6 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig `yaml:"server"`
 	Metric MetricConfig `yaml:"metric"`
 
 	Provider  ProviderConfig  `yaml:"provider"`
@@ -69,6 +68,7 @@ type ConverterConfig struct {
 	Driver           DriverConfig     `yaml:"driver"`
 	HarborAnnotation bool             `yaml:"harbor_annotation"`
 	Rules            []ConversionRule `yaml:"rules"`
+	Async            bool             `yaml:"async"`
 }
 
 type DriverConfig struct {

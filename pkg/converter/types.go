@@ -18,6 +18,13 @@ type Layer struct {
 	ReaderAt content.ReaderAt
 }
 
+type BlobLayer struct {
+	// Digest represents the hash of whole tar blob.
+	Name string
+	// ReaderAt holds the reader of whole tar blob.
+	ReaderAt content.ReaderAt
+}
+
 type PackOption struct {
 	// WorkDir is used as the work directory during layer pack.
 	WorkDir string

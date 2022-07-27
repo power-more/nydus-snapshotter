@@ -18,45 +18,37 @@ import (
 	"context"
 	"io"
 	"os"
+	"path"
 
 	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/content/local"
 	nydusify "github.com/containerd/nydus-snapshotter/pkg/converter"
 	"github.com/opencontainers/go-digest"
-	"github.com/opencontainers/image-spec/identity"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 )
 
-func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.Descriptor, opt nydusify.MergeOption, fsVersion string, bootstrap *os.File) (*ocispec.Descriptor, error) {
+func mergeNydusLayers(ctx context.Context, cs content.Store, blobs []string, opt nydusify.MergeOption, fsVersion string, bootstrap *os.File) (*ocispec.Descriptor, error) {
 	// Extracts nydus bootstrap from nydus format for each layer.
-	layers := []nydusify.Layer{}
+	layers := []nydusify.BlobLayer{}
 
-	var chainID digest.Digest
-	for _, blobDesc := range descs {
-		ra, err := cs.ReaderAt(ctx, blobDesc)
+	for _, blob := range blobs {
+		ra, err := local.OpenReader(blob)
 		if err != nil {
-			return nil, errors.Wrapf(err, "get reader for blob %q", blobDesc.Digest)
+			return nil, errors.Wrapf(err, "get reader for blob %q", blob)
 		}
 		defer ra.Close()
-		layers = append(layers, nydusify.Layer{
-			Digest:   blobDesc.Digest,
+		layers = append(layers, nydusify.BlobLayer{
+			Name:     path.Base(blob),
 			ReaderAt: ra,
 		})
-		if chainID == "" {
-			chainID = identity.ChainID([]digest.Digest{blobDesc.Digest})
-		} else {
-			chainID = identity.ChainID([]digest.Digest{chainID, blobDesc.Digest})
-		}
 	}
 
 	// Merge all nydus bootstraps into a final nydus bootstrap.
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
-		if err := nydusify.Merge(ctx, layers, pw, nydusify.MergeOption{
-			WithTar: false,
-		}); err != nil {
+		if err := nydusify.Merge(ctx, layers, pw, opt); err != nil {
 			pw.CloseWithError(errors.Wrapf(err, "merge nydus bootstrap"))
 		}
 	}()
@@ -73,6 +65,5 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.De
 	if err := cw.Close(); err != nil {
 		return nil, errors.Wrap(err, "close gzip writer")
 	}
-
 	return &ocispec.Descriptor{}, nil
 }
