@@ -20,9 +20,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
+	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/content"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/converter"
 )
 
@@ -54,6 +56,13 @@ func NewLocalHandler(cfg *config.Config, bootstrap *os.File) (*LocalHandler, err
 		return nil, errors.Wrap(err, "create converter")
 	}
 
+	pvd, err := content.NewLocalProvider(
+		cvt.GetProvider(), cvt.GetClient(), cvt.GetSnapshotter(),
+	)
+	if err != nil {
+		return nil, errors.Wrap(err, "create content provider")
+	}
+
 	handler := &LocalHandler{
 		cfg: cfg,
 		cvt: cvt,
@@ -75,8 +84,8 @@ func (handler *LocalHandler) Auth(ctx context.Context, host string, authHeader s
 	return nil
 }
 
-func (handler *LocalHandler) Convert(ctx context.Context, ref string, sync bool) error {
-	return handler.cvt.Dispatch(ctx, ref, sync)
+func (handler *LocalHandler) Convert(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, sync bool) error {
+	return handler.cvt.Dispatch(ctx, ref, manifestDigest, layerDigest, sync)
 }
 
 func (handler *LocalHandler) CheckHealth(ctx context.Context) error {

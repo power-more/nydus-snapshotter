@@ -114,6 +114,62 @@ func GetManifests(ctx context.Context, provider content.Provider, desc ocispec.D
 	return descs, nil
 }
 
+func GetManifestbyDigest(ctx context.Context, provider content.Provider, target digest.Digest, desc ocispec.Descriptor) (ocispec.Descriptor, error) {
+	var res ocispec.Descriptor
+	switch desc.MediaType {
+	case images.MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest:
+		if desc.Digest == target {
+			return desc, nil
+		}
+	case images.MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex:
+		p, err := content.ReadBlob(ctx, provider, desc)
+		if err != nil {
+			return res, err
+		}
+
+		var index ocispec.Index
+		if err := json.Unmarshal(p, &index); err != nil {
+			return res, err
+		}
+
+		for _, idesc := range index.Manifests {
+			if idesc.Digest == target {
+				return idesc, nil
+			}
+		}
+	}
+
+	return res, fmt.Errorf("can not find manifest digest %+v from target descriptor %+v", target, desc)
+}
+
+func GetLayerbyManifest(ctx context.Context, provider content.Provider, target digest.Digest, desc ocispec.Descriptor) (ocispec.Descriptor, error) {
+	var res ocispec.Descriptor
+	switch desc.MediaType {
+	case images.MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest:
+		if desc.Digest == target {
+			return desc, nil
+		}
+	case images.MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex:
+		p, err := content.ReadBlob(ctx, provider, desc)
+		if err != nil {
+			return res, err
+		}
+
+		var index ocispec.Layer
+		if err := json.Unmarshal(p, &index); err != nil {
+			return res, err
+		}
+
+		for _, idesc := range index.Manifests {
+			if idesc.Digest == target {
+				return idesc, nil
+			}
+		}
+	}
+
+	return res, fmt.Errorf("can not find manifest digest %+v from target descriptor %+v", target, desc)
+}
+
 type ExcludeNydusPlatformComparer struct {
 	platforms.MatchComparer
 }

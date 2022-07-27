@@ -22,13 +22,16 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/pkg/cri/constants"
 	"github.com/containerd/containerd/snapshots"
+	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/content"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver"
+	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/driver/nydus/utils"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/errdefs"
+	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/handler"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/metrics"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/task"
 )
@@ -40,7 +43,7 @@ type Converter interface {
 	// by specifying source image reference, the conversion is
 	// asynchronous, and if the sync option is specified,
 	// Dispatch will be blocked until the conversion is complete.
-	Dispatch(ctx context.Context, ref string, sync bool) error
+	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, sync bool) error
 	// CheckHealth checks the containerd client can successfully
 	// connect to the containerd daemon and the healthcheck service
 	// returns the SERVING response.
@@ -54,6 +57,7 @@ type LocalConverter struct {
 	client      *containerd.Client
 	snapshotter snapshots.Snapshotter
 	driver      driver.Driver
+	pvd         content.Provider
 }
 
 func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter, error) {
@@ -81,7 +85,7 @@ func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter,
 		items: cfg.Converter.Rules,
 	}
 
-	handler := &LocalConverter{
+	localConverter := &LocalConverter{
 		cfg:         cfg,
 		rule:        rule,
 		worker:      worker,
@@ -90,10 +94,10 @@ func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter,
 		driver:      driver,
 	}
 
-	return handler, nil
+	return localConverter, nil
 }
 
-func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
+func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, layerDigest digest.Digest, handler handler.Handler) error {
 	ctx, done, err := cvt.client.WithLease(ctx)
 	if err != nil {
 		return errors.Wrap(err, "create lease")
@@ -116,11 +120,15 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
 		return errors.Wrap(err, "create content provider")
 	}
 
-	logger.Infof("pulling image %s", source)
-	if err := content.Pull(ctx, source); err != nil {
-		return errors.Wrap(err, "pull image")
+	manifest, err := utils.GetManifestbyDigest(ctx, handler.pvd.ContentStore(), manifestDigest, content.Image().Target())
+	if err != nil {
+		logger.Infof("pulling image %s", source)
+		if err := content.Pull(ctx, source); err != nil {
+			return errors.Wrap(err, "pull image")
+		}
+		logger.Infof("pulled image %s", source)
+		manifest, err := utils.GetManifestbyDigest(ctx, content.ContentStore(), manifestDigest, content.Image().Target())
 	}
-	logger.Infof("pulled image %s", source)
 
 	logger.Infof("converting image %s", source)
 	_, err = cvt.driver.Convert(ctx, content)
@@ -132,14 +140,14 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string) error {
 	return nil
 }
 
-func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, sync bool) error {
+func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, sync bool) error {
 	taskID := task.Manager.Create(ref)
 
 	if sync {
 		// FIXME: The synchronous conversion task should also be
 		// executed in a limited worker queue.
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(ctx, ref)
+			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
@@ -147,7 +155,7 @@ func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, sync bool) 
 
 	cvt.worker.Dispatch(func() error {
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(context.Background(), ref)
+			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
@@ -169,4 +177,16 @@ func (cvt *LocalConverter) CheckHealth(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (cvt *LocalConverter) GetProvider() *config.ProviderConfig {
+	return &cvt.cfg.Provider
+}
+
+func (cvt *LocalConverter) GetClient() *containerd.Client {
+	return cvt.client
+}
+
+func (cvt *LocalConverter) GetSnapshotter() snapshots.Snapshotter {
+	return cvt.snapshotter
 }

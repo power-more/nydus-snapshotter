@@ -22,7 +22,6 @@ import (
 )
 
 type Config struct {
-	Server ServerConfig `yaml:"server"`
 	Metric MetricConfig `yaml:"metric"`
 
 	Provider  ProviderConfig  `yaml:"provider"`

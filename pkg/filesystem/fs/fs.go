@@ -59,7 +59,6 @@ const (
 )
 
 var nativeEndian binary.ByteOrder
-var SourceSet map[string]bool = make(map[string]bool)
 
 type Mode int
 
@@ -157,7 +156,7 @@ func (fs *Filesystem) PrepareBlobLayer(ctx context.Context, snapshot storage.Sna
 		log.G(ctx).Infof("total nydus prepare data layer duration %d ms", duration.Milliseconds())
 	}()
 
-	ref, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return fmt.Errorf("can not find ref and digest from label %+v", labels)
 	}
@@ -247,7 +246,7 @@ func (fs *Filesystem) SupportStargz(ctx context.Context, labels map[string]strin
 	if !fs.StargzEnabled() {
 		return false, "", "", nil
 	}
-	ref, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return false, "", "", nil
 	}
@@ -470,13 +469,17 @@ func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	// 	return nil, errors.Wrap(err, "failed to get active mount")
 	// }
 
-	source, _ := registry.ParseLabels(labels)
-	if source == "" {
-		return fmt.Errorf("can not find ref and digest from label %+v", labels)
+	source, manifest, layer := registry.ParseLabels(labels)
+	if manifest == "" || layer == "" {
+		return fmt.Errorf("can not find manifestDigest and layerDigest from label %+v", labels)
 	}
-	if _, ok := SourceSet[source]; ok {
-		log.G(ctx).Infof("%s has been converted to nydus", source)
-		return nil
+	manifestDigest, err := digest.Parse(manifest)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse manifest digest")
+	}
+	layerDigest, err := digest.Parse(layer)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse current layer digest")
 	}
 
 	start := time.Now()
@@ -486,7 +489,7 @@ func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	}()
 
 	workdir := filepath.Join(fs.UpperPath(s.ID), BootstrapFile)
-	err := os.Mkdir(filepath.Dir(workdir), 0755)
+	err = os.Mkdir(filepath.Dir(workdir), 0755)
 	if err != nil {
 		return errors.Wrap(err, "failed to create bootstrap dir")
 	}
@@ -527,10 +530,9 @@ func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return err
 	}
 
-	if err = handler.Convert(context.Background(), source, true); err == nil {
-		SourceSet[source] = true
+	if err = handler.Convert(context.Background(), source, manifestDigest, layerDigest, true); err == nil {
 		labels[label.NydusMetaLayer] = "true"
-		log.G(ctx).Info("====zhaoshang success=====  %#+v ", SourceSet)
+		log.G(ctx).Info("====zhaoshang success=====")
 		return nil
 	} else {
 		log.G(ctx).Info("====zhaoshang err=====  %#+v ", err)

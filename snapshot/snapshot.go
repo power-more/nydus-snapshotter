@@ -23,6 +23,8 @@ import (
 	"github.com/containerd/containerd/snapshots"
 	"github.com/containerd/containerd/snapshots/storage"
 	"github.com/containerd/continuity/fs"
+	acceldConfig "github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
+	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/handler"
 	"github.com/containerd/nydus-snapshotter/pkg/cache"
 	metrics "github.com/containerd/nydus-snapshotter/pkg/metric"
 	"github.com/containerd/nydus-snapshotter/pkg/store"
@@ -55,6 +57,7 @@ type snapshotter struct {
 	enableNydusOverlayFS bool
 	syncRemove           bool
 	cleanupOnClose       bool
+	handler              *handler.Handler
 }
 
 func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshotter, error) {
@@ -162,6 +165,24 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		return nil, err
 	}
 
+	var _handler *handler.LocalHandler
+	if cfg.AcceldConfigPath != "" {
+		workdir := filepath.Join("/tmp")
+		nydusBootstrap, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create bootstrap file")
+		}
+
+		acceldcfg, err := acceldConfig.Parse(cfg.AcceldConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		_handler, err = handler.NewLocalHandler(acceldcfg, nydusBootstrap)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &snapshotter{
 		context:              ctx,
 		acceldConfigPath:     cfg.AcceldConfigPath,
@@ -174,6 +195,7 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		hasDaemon:            hasDaemon,
 		enableNydusOverlayFS: cfg.EnableNydusOverlayFS,
 		cleanupOnClose:       cfg.CleanupOnClose,
+		handler:              _handler,
 	}, nil
 }
 
