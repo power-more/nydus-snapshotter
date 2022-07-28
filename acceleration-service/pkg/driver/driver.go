@@ -36,6 +36,8 @@ type Driver interface {
 	// non-nil error will be returned.
 	Convert(context.Context, content.Provider, ocispec.Descriptor, *os.File) (*ocispec.Descriptor, error)
 
+	Merge(context.Context, content.Provider, []string, *os.File) error
+
 	// Name gets the driver type name, it is used to identify
 	// different accelerated image formats.
 	Name() string

@@ -116,6 +116,19 @@ func (d *Driver) Version() string {
 	return ""
 }
 
+func (d *Driver) Merge(ctx context.Context, provider accelcontent.Provider, blobs []string, bootstrap *os.File) error {
+	cs := provider.ContentStore()
+
+	_, err := mergeNydusLayers(ctx, cs, blobs, nydusify.MergeOption{
+		BuilderPath: d.builderPath,
+		WorkDir:     d.workDir,
+	}, d.fsVersion, bootstrap)
+	if err != nil {
+		return errors.Wrap(err, "merge nydus layers")
+	}
+	return nil
+}
+
 func (d *Driver) Convert(ctx context.Context, provider accelcontent.Provider, layerDesc ocispec.Descriptor, blob *os.File) (*ocispec.Descriptor, error) {
 	cs := provider.ContentStore()
 

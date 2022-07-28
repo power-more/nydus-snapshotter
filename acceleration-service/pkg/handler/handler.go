@@ -89,3 +89,7 @@ func (handler *LocalHandler) CheckHealth(ctx context.Context) error {
 func (handler *LocalHandler) GetConfig() *config.Config {
 	return handler.cfg
 }
+
+func (handler *LocalHandler) Merge(ctx context.Context, blobs []string, bootstrap *os.File) error {
+	return handler.cvt.Merge(ctx, blobs, bootstrap)
+}

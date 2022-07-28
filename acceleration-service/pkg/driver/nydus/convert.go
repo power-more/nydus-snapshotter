@@ -44,8 +44,6 @@ func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend, blob 
 		rdr := io.NewSectionReader(ra, 0, ra.Size())
 
 		// dst, err := content.OpenWriter(ctx, cs, content.WithRef(ref))
-		uncompressedDgst := digest.SHA256.Digester()
-		compressed := io.MultiWriter(blob, uncompressedDgst.Hash())
 		if err != nil {
 			return nil, errors.Wrap(err, "open blob writer")
 		}
@@ -79,7 +77,7 @@ func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend, blob 
 			}
 		}()
 
-		if _, err := io.Copy(compressed, pr); err != nil {
+		if _, err := io.Copy(blob, pr); err != nil {
 			return nil, errors.Wrap(err, "copy nydus blob to content store")
 		}
 

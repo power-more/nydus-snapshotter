@@ -345,6 +345,40 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 			logCtx.Infof("====zhaoshang findMetaLayer=====id = %#v, info = %#v, base = %#v", id, info, *base)
 			return o.remoteMounts(ctx, s, id, info.Labels)
+		} else {
+			if len(s.ParentIDs) == 0 {
+				return o.mounts(ctx, base, s)
+			}
+			_, info, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+			cKey := info.Parent
+			pid, pinfo, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, cKey)
+			ps, err := snapshot.GetSnapshot(ctx, o.ms, cKey)
+
+			localfsDir := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], s.ID)
+			var blobs []string
+			for _, id := range s.ParentIDs {
+				blob, err := os.Stat(filepath.Join(localfsDir, id))
+				if err != nil {
+					return o.mounts(ctx, base, s)
+				}
+				blobs = append(blobs, blob.Name())
+			}
+			logCtx.Infof("====zhaoshang getblobs====%#v", blobs)
+
+			workdir := filepath.Join(o.fs.UpperPath(s.ParentIDs[0]), fspkg.BootstrapFile)
+			err = os.Mkdir(filepath.Dir(workdir), 0755)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to create bootstrap dir")
+			}
+			bootstrap, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to create bootstrap file")
+			}
+			if err := o.handler.Merge(ctx, blobs, bootstrap); err != nil {
+				return nil, err
+			}
+
+			return o.remoteMounts(ctx, *ps, pid, pinfo.Labels)
 		}
 	}
 
@@ -565,19 +599,19 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			return nil, storage.Snapshot{}, errors.Wrap(err, "failed to chown")
 		}
 	}
-
+	logrus.Info("====zhaoshang 1111111return &base, s, nil=====  %#v ", s1)
 	path = o.snapshotDir(s.ID)
 	if err = os.Rename(td, path); err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to rename")
 	}
 	td = ""
-
+	logrus.Info("====zhaoshang 22222222return &base, s, nil=====  %#v ", s1)
 	rollback = false
 	if err = t.Commit(); err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "commit failed")
 	}
 	path = ""
-
+	logrus.Info("====zhaoshang 333333333return &base, s, nil=====  %#v ", s1)
 	return &base, s, nil
 }
 
@@ -887,7 +921,6 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	logrus.Info("====zhaoshang blobfile=====  %+v", blob)
 
 	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true); err == nil {
-		labels[label.NydusMetaLayer] = "true"
 		log.G(ctx).Info("====zhaoshang success=====")
 		return nil
 	} else {

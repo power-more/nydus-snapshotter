@@ -308,7 +308,7 @@ func Pack(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteCloser, 
 }
 
 // Merge multiple nydus boostraps (from every layer of image) to a final boostrap.
-func Merge(ctx context.Context, layers []Layer, dest io.Writer, opt MergeOption) error {
+func Merge(ctx context.Context, layers []BlobLayer, dest io.Writer, opt MergeOption) error {
 	workDir, err := ioutil.TempDir(getWorkdir(opt.WorkDir), "nydus-converter-")
 	if err != nil {
 		return errors.Wrap(err, "create work directory")
@@ -318,13 +318,13 @@ func Merge(ctx context.Context, layers []Layer, dest io.Writer, opt MergeOption)
 	eg, ctx := errgroup.WithContext(ctx)
 	sourceBootstrapPaths := []string{}
 	for idx := range layers {
-		sourceBootstrapPaths = append(sourceBootstrapPaths, filepath.Join(workDir, layers[idx].Digest.Hex()))
+		sourceBootstrapPaths = append(sourceBootstrapPaths, filepath.Join(workDir, layers[idx].Name))
 		eg.Go(func(idx int) func() error {
 			return func() error {
 				layer := layers[idx]
 
 				// Use the hex hash string of whole tar blob as the boostrap name.
-				bootstrap, err := os.Create(filepath.Join(workDir, layer.Digest.Hex()))
+				bootstrap, err := os.Create(filepath.Join(workDir, layer.Name))
 				if err != nil {
 					return errors.Wrap(err, "create source bootstrap")
 				}

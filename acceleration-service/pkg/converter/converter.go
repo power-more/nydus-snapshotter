@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/containerd/containerd"
+	containerdcontent "github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/pkg/cri/constants"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/opencontainers/go-digest"
@@ -44,6 +45,8 @@ type Converter interface {
 	// asynchronous, and if the sync option is specified,
 	// Dispatch will be blocked until the conversion is complete.
 	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool) error
+
+	Merge(ctx context.Context, blobs []string, bootstrap *os.File) error
 	// CheckHealth checks the containerd client can successfully
 	// connect to the containerd daemon and the healthcheck service
 	// returns the SERVING response.
@@ -108,6 +111,10 @@ func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
 	return localConverter, nil
 }
 
+func (cvt *LocalConverter) Merge(ctx context.Context, blobs []string, bootstrap *os.File) error {
+	return cvt.driver.Merge(ctx, cvt.pvd, blobs, bootstrap)
+}
+
 func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File) error {
 	ctx, done, err := cvt.client.WithLease(ctx)
 	if err != nil {
@@ -118,6 +125,7 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 	descs, ok := cvt.manifestLayersMap[manifestDigest]
 	// the first layer
 	if !ok {
+		// check content if current layer exist
 		logger.Infof("pulling image %s", source)
 		start := time.Now()
 		if err := cvt.pvd.Pull(ctx, source); err != nil {
@@ -202,14 +210,6 @@ func (cvt *LocalConverter) CheckHealth(ctx context.Context) error {
 	return nil
 }
 
-func (cvt *LocalConverter) GetProvider() *config.ProviderConfig {
-	return &cvt.cfg.Provider
-}
-
-func (cvt *LocalConverter) GetClient() *containerd.Client {
-	return cvt.client
-}
-
-func (cvt *LocalConverter) GetSnapshotter() snapshots.Snapshotter {
-	return cvt.snapshotter
+func (cvt *LocalConverter) GetContentStore() containerdcontent.Store {
+	return cvt.pvd.ContentStore()
 }
