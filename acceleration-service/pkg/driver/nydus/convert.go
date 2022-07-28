@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path"
 
 	"github.com/containerd/containerd/archive/compression"
 	"github.com/containerd/containerd/content"
@@ -28,6 +29,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend, blob *os.File) converter.ConvertFunc {
@@ -56,7 +58,8 @@ func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend, blob 
 
 		digester := digest.SHA256.Digester()
 		pr, pw := io.Pipe()
-		tw, err := nydusify.Pack(ctx, io.MultiWriter(pw, digester.Hash()), opt)
+		logrus.Infof("====zhaoshang blob.Name=====  %s ", path.Base(blob.Name()))
+		tw, err := nydusify.Pack(ctx, io.MultiWriter(pw, digester.Hash()), opt, path.Base(blob.Name()))
 		if err != nil {
 			return nil, errors.Wrap(err, "pack tar to nydus")
 		}

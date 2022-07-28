@@ -235,7 +235,7 @@ func unpackBlobFromNydusTar(ctx context.Context, ra content.ReaderAt, target io.
 //
 // Important: the caller must check `io.WriteCloser.Close() == nil` to ensure
 // the conversion workflow is finish.
-func Pack(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteCloser, error) {
+func Pack(ctx context.Context, dest io.Writer, opt PackOption, id string) (io.WriteCloser, error) {
 	workDir, err := ioutil.TempDir(getWorkdir(opt.WorkDir), "nydus-converter-")
 	if err != nil {
 		return nil, errors.Wrap(err, "create work directory")
@@ -290,6 +290,7 @@ func Pack(ctx context.Context, dest io.Writer, opt PackOption) (io.WriteCloser, 
 				ChunkDictPath:    opt.ChunkDictPath,
 				PrefetchPatterns: opt.PrefetchPatterns,
 				Compressor:       opt.Compressor,
+				BlobID:           id,
 			})
 			if err != nil {
 				pw.CloseWithError(errors.Wrapf(err, "convert blob for %s", sourceDir))

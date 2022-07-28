@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"os"
+	"path"
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/content/local"
@@ -39,7 +40,7 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, blobs []string, opt
 		}
 		defer ra.Close()
 		layers = append(layers, nydusify.BlobLayer{
-			Name:     blob,
+			Name:     path.Base(blob),
 			ReaderAt: ra,
 		})
 	}
@@ -60,13 +61,13 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, blobs []string, opt
 	uncompressedDgst := digest.SHA256.Digester()
 	uncompressed := io.MultiWriter(cw, uncompressedDgst.Hash())
 	if _, err := io.Copy(uncompressed, pr); err != nil {
-		log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) fail =====  %#+v ", uncompressed)
+		log.G(ctx).Infof("====zhaoshang io.Copy(uncompressed, pr) fail =====  %#+v ", uncompressed)
 		return nil, errors.Wrapf(err, "copy uncompressed bootstrap into %s", bootstrap.Name())
 	}
-	log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) success =====  %#+v ", uncompressed)
+
 	if err := cw.Close(); err != nil {
 		return nil, errors.Wrap(err, "close gzip writer")
 	}
-
+	log.G(ctx).Infof("====zhaoshang mergeNydusLayers success =====  %#+v ", uncompressed)
 	return &ocispec.Descriptor{}, nil
 }

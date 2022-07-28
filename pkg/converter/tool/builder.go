@@ -26,6 +26,7 @@ type PackOption struct {
 	ChunkDictPath    string
 	PrefetchPatterns string
 	Compressor       string
+	BlobID           string
 }
 
 type MergeOption struct {
@@ -57,6 +58,8 @@ func Pack(option PackOption) error {
 		"fs",
 		"--blob",
 		option.BlobPath,
+		"--blob-id",
+		option.BlobID,
 		"--source-type",
 		"directory",
 		"--whiteout-spec",

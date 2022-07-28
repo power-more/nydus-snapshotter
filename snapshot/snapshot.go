@@ -275,6 +275,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 
 	// Handle nydus/stargz image layers.
 	if target, ok := base.Labels[label.TargetSnapshotRef]; ok {
+		logCtx.Infof("snapshot ref label found %s", label.TargetSnapshotRef)
 		// check if image layer is nydus data layer
 		if o.fs.Support(ctx, base.Labels) {
 			logCtx.Infof("nydus data layer, skip download and unpack %s", key)
@@ -304,8 +305,8 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad {
 			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
-			log.G(ctx).Info("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
-			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels)
+			log.G(ctx).Infof("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
+			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
 			} else {
@@ -346,26 +347,39 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			logCtx.Infof("====zhaoshang findMetaLayer=====id = %#v, info = %#v, base = %#v", id, info, *base)
 			return o.remoteMounts(ctx, s, id, info.Labels)
 		} else {
+			logrus.Infof("====zhaoshang findMetaLayer err=====  %#v ", err)
 			if len(s.ParentIDs) == 0 {
+				logrus.Infof("====zhaoshang s.ParentIDs s=====  %#v ", s)
 				return o.mounts(ctx, base, s)
 			}
 			_, info, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+			if err != nil {
+				log.G(ctx).WithError(err).Warnf("==zhaoshang=== failed to get info of %q", key)
+				return nil, err
+			}
 			cKey := info.Parent
 			pid, pinfo, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, cKey)
-			ps, err := snapshot.GetSnapshot(ctx, o.ms, cKey)
-
-			localfsDir := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], s.ID)
-			var blobs []string
-			for _, id := range s.ParentIDs {
-				blob, err := os.Stat(filepath.Join(localfsDir, id))
-				if err != nil {
-					return o.mounts(ctx, base, s)
-				}
-				blobs = append(blobs, blob.Name())
+			if err != nil {
+				logrus.Infof("====zhaoshang GetSnapshotInfo err=====  %#v ", err)
+				return nil, err
 			}
-			logCtx.Infof("====zhaoshang getblobs====%#v", blobs)
+			log.G(ctx).Infof("====zhaoshang info %#v, cKey %s, pid %s, pinfo %#v ", info, cKey, pid, pinfo)
 
-			workdir := filepath.Join(o.fs.UpperPath(s.ParentIDs[0]), fspkg.BootstrapFile)
+			blobs, err := getBlobs(ctx, o.ms, o.handler.GetConfig().Converter.Driver.Config["work_dir"], cKey)
+			if err != nil {
+				return o.mounts(ctx, base, s)
+			}
+			// for _, id := range s.ParentIDs {
+			// 	blob, err := os.Stat(filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], id))
+			// 	if err != nil {
+			// 		logrus.Infof("====zhaoshang 373 err=====  %#v ", err)
+			// 		return o.mounts(ctx, base, s)
+			// 	}
+			// 	blobs = append(blobs, blob.Name())
+			// }
+			workdir := filepath.Join(o.fs.UpperPath(pid), fspkg.BootstrapFile)
+			logCtx.Infof("====zhaoshang getblobs====%#v, bootstrapfile %+v", blobs, workdir)
+
 			err = os.Mkdir(filepath.Dir(workdir), 0755)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to create bootstrap dir")
@@ -375,13 +389,16 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 				return nil, errors.Wrap(err, "failed to create bootstrap file")
 			}
 			if err := o.handler.Merge(ctx, blobs, bootstrap); err != nil {
+				logrus.Infof("====zhaoshang no remoteMounts===== %+v ", err)
 				return nil, err
 			}
-
-			return o.remoteMounts(ctx, *ps, pid, pinfo.Labels)
+			logCtx.Infof("====zhaoshang ctx = %s", ctx)
+			logCtx.Infof("====zhaoshang s = %#v", s)
+			logCtx.Infof("====zhaoshang remoteMounts=====id = %#v, info = %#v, base = %#v", pid, pinfo, *base)
+			return o.remoteMounts(ctx, s, pid, pinfo.Labels)
 		}
 	}
-
+	logCtx.Infof("====zhaoshang o.mounts=")
 	return o.mounts(ctx, base, s)
 }
 
@@ -579,14 +596,13 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create prepare snapshot dir")
 	}
 
-	logrus.Info("====zhaoshang CreateSnapshot=====  %#v ", key)
 	s, err := storage.CreateSnapshot(ctx, kind, key, parent, opts...)
 	if err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create snapshot")
 	}
 
 	s1, err := storage.GetSnapshot(ctx, key)
-	logrus.Info("====zhaoshang GetSnapshot=====  %#v ", s1)
+	logrus.Infof("====zhaoshang GetSnapshot=====  %#v ", s1)
 
 	if len(s.ParentIDs) > 0 {
 		st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
@@ -599,19 +615,19 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			return nil, storage.Snapshot{}, errors.Wrap(err, "failed to chown")
 		}
 	}
-	logrus.Info("====zhaoshang 1111111return &base, s, nil=====  %#v ", s1)
+	logrus.Infof("====zhaoshang 1111111return &base, s, nil=====  %#v ", s1)
 	path = o.snapshotDir(s.ID)
 	if err = os.Rename(td, path); err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to rename")
 	}
 	td = ""
-	logrus.Info("====zhaoshang 22222222return &base, s, nil=====  %#v ", s1)
+	logrus.Infof("====zhaoshang 22222222return &base, s, nil=====  %#v ", s1)
 	rollback = false
 	if err = t.Commit(); err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "commit failed")
 	}
 	path = ""
-	logrus.Info("====zhaoshang 333333333return &base, s, nil=====  %#v ", s1)
+	logrus.Infof("====zhaoshang 333333333return &base, s, nil=====  %#v ", s1)
 	return &base, s, nil
 }
 
@@ -870,7 +886,7 @@ func (o *snapshotter) snapshotDir(id string) string {
 	return filepath.Join(o.snapshotRoot(), id)
 }
 
-func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string) error {
+func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, target string) error {
 
 	// start := time.Now()
 	// defer func() {
@@ -913,18 +929,52 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return errors.Wrap(err, "failed to parse current layer digest")
 	}
 
-	workdir := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], s.ID)
+	keyDigest, err := digest.Parse(target)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse target")
+	}
+
+	workdir := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], keyDigest.Encoded())
 	blob, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
 	if err != nil {
 		return errors.Wrap(err, "failed to open blob file")
 	}
-	logrus.Info("====zhaoshang blobfile=====  %+v", blob)
+	logrus.Infof("====zhaoshang blobfile=====  %+v", blob)
 
 	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true); err == nil {
-		log.G(ctx).Info("====zhaoshang success=====")
+		log.G(ctx).Infof("====zhaoshang success=====")
 		return nil
 	} else {
-		log.G(ctx).Info("====zhaoshang err=====  %#+v ", err)
+		log.G(ctx).Infof("====zhaoshang err=====  %#+v ", err)
 		return err
 	}
+}
+
+func getBlobs(ctx context.Context, ms *storage.MetaStore, blobdir string, key string) ([]string, error) {
+	ctx, t, err := ms.TransactionContext(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	defer t.Rollback()
+
+	var blobs []string
+	for cKey := key; cKey != ""; {
+		_, info, _, err := storage.GetInfo(ctx, cKey)
+		if err != nil {
+			log.G(ctx).WithError(err).Warnf("failed to get info of %q", cKey)
+			return nil, err
+		}
+		keyDigest, err := digest.Parse(info.Name)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse info name")
+		}
+		blob := filepath.Join(blobdir, keyDigest.Encoded())
+		if _, err := os.Stat(blob); err != nil {
+			return nil, err
+		}
+		blobs = append(blobs, blob)
+
+		cKey = info.Parent
+	}
+	return blobs, nil
 }

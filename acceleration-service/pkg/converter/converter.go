@@ -73,7 +73,7 @@ func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "create containerd client")
 	}
-	logrus.Info("====zhaoshang containerdclient=====  %#+v ", *client)
+	logrus.Infof("====zhaoshang containerdclient=====  %#+v ", *client)
 	snapshotter := client.SnapshotService(cfg.Provider.Containerd.Snapshotter)
 
 	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver)
@@ -143,10 +143,10 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 		}
 		cvt.manifestLayersMap[manifestDigest] = descs
 	}
-	logrus.Info("====zhaoshang cvt.manifestLayersMap %+v", cvt.manifestLayersMap)
+	logrus.Infof("====zhaoshang cvt.manifestLayersMap %+v", cvt.manifestLayersMap)
 	var islastlayer bool = false
 	for i, layerDesc := range descs {
-		logrus.Info("====zhaoshang layerDesc.Digest = %s, currentLayerDigest = %s ", layerDesc.Digest, currentLayerDigest)
+		logrus.Infof("====zhaoshang layerDesc.Digest = %s, currentLayerDigest = %s ", layerDesc.Digest, currentLayerDigest)
 		if layerDesc.Digest != currentLayerDigest {
 			continue
 		}
