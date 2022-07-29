@@ -18,10 +18,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd"
 	containerdcontent "github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/pkg/cri/constants"
 	"github.com/containerd/containerd/snapshots"
 	"github.com/opencontainers/go-digest"
@@ -44,7 +46,7 @@ type Converter interface {
 	// by specifying source image reference, the conversion is
 	// asynchronous, and if the sync option is specified,
 	// Dispatch will be blocked until the conversion is complete.
-	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool) error
+	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error
 
 	Merge(ctx context.Context, blobs []string, bootstrap *os.File) error
 	// CheckHealth checks the containerd client can successfully
@@ -115,43 +117,47 @@ func (cvt *LocalConverter) Merge(ctx context.Context, blobs []string, bootstrap 
 	return cvt.driver.Merge(ctx, cvt.pvd, blobs, bootstrap)
 }
 
-func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File) error {
+func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File, isLastLayer bool) error {
 	ctx, done, err := cvt.client.WithLease(ctx)
 	if err != nil {
 		return errors.Wrap(err, "create lease")
 	}
 	defer done(ctx)
 
-	descs, ok := cvt.manifestLayersMap[manifestDigest]
-	// the first layer
-	if !ok {
-		// check content if current layer exist
+	// check content if current layer exist
+	cs := cvt.pvd.ContentStore()
+	if _, err = cs.Info(ctx, currentLayerDigest); err != nil {
+		// if ErrNotFound, pull image
+		if !strings.Contains(err.Error(), errdefs.ErrNotFound.Error()) {
+			return errors.Wrap(err, "get info of layer")
+		}
 		logger.Infof("pulling image %s", source)
 		start := time.Now()
 		if err := cvt.pvd.Pull(ctx, source); err != nil {
 			return errors.Wrap(err, "pull image")
 		}
 		logger.Infof("pulled image %s, elapse %s", source, time.Since(start))
+	}
 
-		manifest, err := utils.GetManifestbyDigest(ctx, cvt.pvd.ContentStore(), manifestDigest, cvt.pvd.Image().Target())
+	descs, ok := cvt.manifestLayersMap[manifestDigest]
+	if !ok {
+		cs = cvt.pvd.ContentStore()
+		manifest, err := utils.GetManifestbyDigest(ctx, cs, manifestDigest, cvt.pvd.Image().Target())
 		if err != nil {
 			return err
 		}
-		descs, err = utils.GetLayersbyManifestDescriptor(ctx, cvt.pvd.ContentStore(), *manifest)
+		descs, err = utils.GetLayersbyManifestDescriptor(ctx, cs, *manifest)
 		if err != nil {
 			return err
 		}
 		cvt.manifestLayersMap[manifestDigest] = descs
 	}
+
 	logrus.Infof("====zhaoshang cvt.manifestLayersMap %+v", cvt.manifestLayersMap)
-	var islastlayer bool = false
-	for i, layerDesc := range descs {
+	for _, layerDesc := range descs {
 		logrus.Infof("====zhaoshang layerDesc.Digest = %s, currentLayerDigest = %s ", layerDesc.Digest, currentLayerDigest)
 		if layerDesc.Digest != currentLayerDigest {
 			continue
-		}
-		if i == len(descs)-1 {
-			islastlayer = true
 		}
 
 		// if cvt.cfg.Converter.Async, go routine
@@ -164,21 +170,21 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 		break
 	}
 
-	if cvt.cfg.Converter.Async && islastlayer {
+	if cvt.cfg.Converter.Async && isLastLayer {
 		// wait group
 	}
 
 	return nil
 }
 
-func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool) error {
+func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error {
 	taskID := task.Manager.Create(ref)
 
 	if sync {
 		// FIXME: The synchronous conversion task should also be
 		// executed in a limited worker queue.
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob)
+			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob, isLastLayer)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
@@ -186,7 +192,7 @@ func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDig
 
 	cvt.worker.Dispatch(func() error {
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob)
+			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob, isLastLayer)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")

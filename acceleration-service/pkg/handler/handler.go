@@ -76,8 +76,8 @@ func (handler *LocalHandler) Auth(ctx context.Context, host string, authHeader s
 	return nil
 }
 
-func (handler *LocalHandler) Convert(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool) error {
-	return handler.cvt.Dispatch(ctx, ref, manifestDigest, layerDigest, blob, sync)
+func (handler *LocalHandler) Convert(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error {
+	return handler.cvt.Dispatch(ctx, ref, manifestDigest, layerDigest, blob, sync, isLastLayer)
 }
 
 func (handler *LocalHandler) CheckHealth(ctx context.Context) error {
