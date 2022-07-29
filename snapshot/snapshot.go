@@ -59,6 +59,7 @@ type snapshotter struct {
 	syncRemove           bool
 	cleanupOnClose       bool
 	handler              *handler.LocalHandler
+	acceldConfig         *acceldConfig.Config
 }
 
 func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshotter, error) {
@@ -166,14 +167,22 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		return nil, err
 	}
 
-	var _handler *handler.LocalHandler
-	// FIXME(zhaoshang) when to use handler
-	if cfg.AcceldConfigPath != "" && nydusFs.ImageMode == fspkg.PreLoad {
-		acceldcfg, err := acceldConfig.Parse(cfg.AcceldConfigPath)
-		if err != nil {
-			return nil, err
-		}
-		_handler, err = handler.NewLocalHandler(acceldcfg)
+	// var _handler *handler.LocalHandler
+	// // FIXME(zhaoshang) when to use handler
+	// if cfg.AcceldConfigPath != "" && nydusFs.ImageMode == fspkg.PreLoad {
+	// 	acceldcfg, err := acceldConfig.Parse(cfg.AcceldConfigPath)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	_handler, err = handler.NewLocalHandler(acceldcfg)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
+
+	var acceldcfg *acceldConfig.Config
+	if nydusFs.ImageMode == fspkg.PreLoad {
+		acceldcfg, err = acceldConfig.Parse(cfg.AcceldConfigPath)
 		if err != nil {
 			return nil, err
 		}
@@ -190,7 +199,8 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		hasDaemon:            hasDaemon,
 		enableNydusOverlayFS: cfg.EnableNydusOverlayFS,
 		cleanupOnClose:       cfg.CleanupOnClose,
-		handler:              _handler,
+		handler:              nil,
+		acceldConfig:         acceldcfg,
 	}, nil
 }
 
@@ -266,7 +276,23 @@ func (o *snapshotter) prepareRemoteSnapshot(ctx context.Context, id string, labe
 	return o.fs.Mount(o.context, id, labels)
 }
 
+func (o *snapshotter) checkHandler() error {
+	if o.handler != nil || o.acceldConfig == nil {
+		return nil
+	}
+	var err error
+	o.handler, err = handler.NewLocalHandler(o.acceldConfig)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...snapshots.Opt) ([]mount.Mount, error) {
+	if err := o.checkHandler(); err != nil {
+		return nil, err
+	}
+
 	logCtx := log.G(ctx).WithField("key", key).WithField("parent", parent)
 	base, s, err := o.createSnapshot(ctx, snapshots.KindActive, key, parent, opts)
 	if err != nil {
