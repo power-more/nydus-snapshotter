@@ -166,7 +166,8 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 	}
 
 	var _handler *handler.LocalHandler
-	if cfg.AcceldConfigPath != "" {
+	// FIXME(zhaoshang) when to use handler
+	if cfg.AcceldConfigPath != "" && nydusFs.ImageMode == fspkg.PreLoad {
 		acceldcfg, err := acceldConfig.Parse(cfg.AcceldConfigPath)
 		if err != nil {
 			return nil, err
@@ -302,7 +303,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
 				}
 			}
-		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad && !o.fs.SupportMeta(ctx, base.Labels) {
+		} else if o.handler != nil && !o.fs.SupportMeta(ctx, base.Labels) {
 			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
 			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target)
 			if err != nil {
@@ -343,7 +344,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 				return nil, err
 			}
 			return o.remoteMounts(ctx, s, id, info.Labels)
-		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad {
+		} else if o.handler != nil {
 			if len(s.ParentIDs) == 0 {
 				return o.mounts(ctx, base, s)
 			}
