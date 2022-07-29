@@ -394,17 +394,21 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 			logCtx.Infof("find blobs converted from the OCI layer: %v", blobs)
 
-			workdir := filepath.Join(o.fs.UpperPath(pid), fspkg.BootstrapFile)
+			bootstrap := filepath.Join(o.fs.UpperPath(pid), fspkg.BootstrapFile)
+			if _, err := os.Stat(bootstrap); err == nil {
+				logCtx.Infof("bootstrap already exists %s", bootstrap)
+				return o.remoteMounts(ctx, s, pid, pinfo.Labels)
+			}
 
-			err = os.Mkdir(filepath.Dir(workdir), 0755)
+			err = os.Mkdir(filepath.Dir(bootstrap), 0755)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to create bootstrap dir")
 			}
-			bootstrap, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
+			bootstrapFile, err := os.OpenFile(bootstrap, os.O_CREATE|os.O_RDWR, 0755)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to create bootstrap file")
 			}
-			if err := o.handler.Merge(ctx, blobs, bootstrap); err != nil {
+			if err := o.handler.Merge(ctx, blobs, bootstrapFile); err != nil {
 				return nil, errors.Wrap(err, "failed to merge blobs into final bootstrap")
 			}
 			logCtx.Infof("merge uncompressed bootstrap successfully")
