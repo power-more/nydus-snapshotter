@@ -420,18 +420,22 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			// 	}
 			// 	blobs = append(blobs, blob.Name())
 			// }
-			workdir := filepath.Join(o.fs.UpperPath(pid), fspkg.BootstrapFile)
-			logCtx.Infof("====zhaoshang getblobs====%#v, bootstrapfile %+v", blobs, workdir)
+			bootstrap := filepath.Join(o.fs.UpperPath(pid), fspkg.BootstrapFile)
+			if _, err := os.Stat(bootstrap); err == nil {
+				logCtx.Infof("bootstrap already exists %s", bootstrap)
+				return o.remoteMounts(ctx, s, pid, pinfo.Labels)
+			}
 
-			err = os.Mkdir(filepath.Dir(workdir), 0755)
+			logCtx.Infof("====zhaoshang getblobs====%#v, bootstrapfile %+v", blobs, bootstrap)
+			err = os.Mkdir(filepath.Dir(bootstrap), 0755)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to create bootstrap dir")
 			}
-			bootstrap, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
+			bootstrapFile, err := os.OpenFile(bootstrap, os.O_CREATE|os.O_RDWR, 0755)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to create bootstrap file")
 			}
-			if err := o.handler.Merge(ctx, blobs, bootstrap); err != nil {
+			if err := o.handler.Merge(ctx, blobs, bootstrapFile); err != nil {
 				logrus.Infof("====zhaoshang no remoteMounts===== %+v ", err)
 				return nil, err
 			}
