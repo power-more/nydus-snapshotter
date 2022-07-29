@@ -255,6 +255,11 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 		return nil, errors.Wrap(err, "failed to get active mount")
 	}
 
+	_, snap, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+	if err != nil {
+		return nil, errors.Wrap(err, fmt.Sprintf("failed to get info for snapshot %s", key))
+	}
+
 	if id, info, rErr := o.findMetaLayer(ctx, key); rErr == nil {
 		err = o.fs.WaitUntilReady(ctx, id)
 		if err != nil {
@@ -262,12 +267,23 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 			return nil, err
 		}
 		return o.remoteMounts(ctx, *s, id, info.Labels)
+	} else if o.handler != nil {
+		if len(s.ParentIDs) == 0 {
+			return o.mounts(ctx, &snap, *s)
+		}
+		cKey := snap.Parent
+		pid, pinfo, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, cKey)
+		if err != nil {
+			logrus.Infof("====zhaoshang GetSnapshotInfo err=====  %#v ", err)
+			return nil, err
+		}
+		bootstrap := filepath.Join(o.fs.UpperPath(pid), fspkg.BootstrapFile)
+		if _, err := os.Stat(bootstrap); err != nil {
+			return o.mounts(ctx, &snap, *s)
+		}
+		return o.remoteMounts(ctx, *s, pid, pinfo.Labels)
 	}
 
-	_, snap, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
-	if err != nil {
-		return nil, errors.Wrap(err, fmt.Sprintf("failed to get info for snapshot %s", key))
-	}
 	return o.mounts(ctx, &snap, *s)
 }
 
@@ -379,18 +395,18 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 				logrus.Infof("====zhaoshang s.ParentIDs s=====  %#v ", s)
 				return o.mounts(ctx, base, s)
 			}
-			_, info, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+			_, snap, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
 			if err != nil {
 				log.G(ctx).WithError(err).Warnf("==zhaoshang=== failed to get info of %q", key)
 				return nil, err
 			}
-			cKey := info.Parent
+			cKey := snap.Parent
 			pid, pinfo, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, cKey)
 			if err != nil {
 				logrus.Infof("====zhaoshang GetSnapshotInfo err=====  %#v ", err)
 				return nil, err
 			}
-			log.G(ctx).Infof("====zhaoshang info %#v, cKey %s, pid %s, pinfo %#v ", info, cKey, pid, pinfo)
+			log.G(ctx).Infof("====zhaoshang snapinfo %#v, cKey %s, pid %s, pinfo %#v ", snap, cKey, pid, pinfo)
 
 			blobs, err := getBlobs(ctx, o.ms, o.handler.GetConfig().Converter.Driver.Config["work_dir"], cKey)
 			if err != nil {
