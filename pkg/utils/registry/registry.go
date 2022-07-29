@@ -48,7 +48,7 @@ func ParseImage(imageID string) (Image, error) {
 	}, nil
 }
 
-func ParseLabels(labels map[string]string) (rRef, rManifest, rLayer string) {
+func ParseLabels(labels map[string]string) (rRef, rManifest, rLayer, rLayers string) {
 	if ref, ok := labels[label.CRIImageRef]; ok {
 		rRef = ref
 	}
@@ -57,6 +57,9 @@ func ParseLabels(labels map[string]string) (rRef, rManifest, rLayer string) {
 	}
 	if layerDigest, ok := labels[label.CRILayerDigest]; ok {
 		rLayer = layerDigest
+	}
+	if layersDigest, ok := labels[label.CRIImageLayers]; ok {
+		rLayers = layersDigest
 	}
 	return
 }
