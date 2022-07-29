@@ -64,7 +64,7 @@ func NewLocalConverter(cfg *config.Config, bootstrap *os.File) (*LocalConverter,
 	if err != nil {
 		return nil, errors.Wrap(err, "create containerd client")
 	}
-	logrus.Info("====zhaoshang containerdclient=====  %#+v ", *client)
+	logrus.Infof("====zhaoshang containerdclient=====  %#+v ", *client)
 	snapshotter := client.SnapshotService(cfg.Provider.Containerd.Snapshotter)
 
 	driver, err := driver.NewLocalDriver(&cfg.Converter.Driver, bootstrap)

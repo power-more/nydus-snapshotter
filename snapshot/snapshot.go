@@ -288,7 +288,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 		} else if o.acceldConfigPath != "" && o.fs.ImageMode == fspkg.PreLoad {
 			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
-			log.G(ctx).Info("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
+			log.G(ctx).Infof("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
 			err = o.fs.PrepareOCItoNydusLayer(ctx, s, base.Labels, o.acceldConfigPath)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
@@ -327,7 +327,9 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			} else if err := o.prepareRemoteSnapshot(ctx, id, info.Labels); err != nil {
 				return nil, err
 			}
-			logCtx.Infof("====zhaoshang findMetaLayer=====id = %#v, info = %#v, base = %#v", id, info, *base)
+			logCtx.Infof("====zhaoshang ctx = %s", ctx)
+			logCtx.Infof("====zhaoshang s = %#v", s)
+			logCtx.Infof("====zhaoshang remoteMounts=====id = %#v, info = %#v, base = %#v", id, info, *base)
 			return o.remoteMounts(ctx, s, id, info.Labels)
 		}
 	}
@@ -529,14 +531,14 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create prepare snapshot dir")
 	}
 
-	logrus.Info("====zhaoshang CreateSnapshot=====  %#v ", key)
+	logrus.Infof("====zhaoshang CreateSnapshot=====  %#v ", key)
 	s, err := storage.CreateSnapshot(ctx, kind, key, parent, opts...)
 	if err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create snapshot")
 	}
 
 	s1, err := storage.GetSnapshot(ctx, key)
-	logrus.Info("====zhaoshang GetSnapshot=====  %#v ", s1)
+	logrus.Infof("====zhaoshang GetSnapshot=====  %#v ", s1)
 
 	if len(s.ParentIDs) > 0 {
 		st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
@@ -672,6 +674,8 @@ func (o *snapshotter) remoteMounts(ctx context.Context, s storage.Snapshot, id s
 	// base64 to filter easily in `nydus-overlayfs`
 	opt := fmt.Sprintf("extraoption=%s", base64.StdEncoding.EncodeToString(no))
 	options := append(overlayOptions, opt)
+
+	log.G(ctx).Infof("=====zhaoshang options %#v", options)
 	return []mount.Mount{
 		{
 			Type:    "fuse.nydus-overlayfs",

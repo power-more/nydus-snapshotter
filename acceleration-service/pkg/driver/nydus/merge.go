@@ -69,10 +69,10 @@ func mergeNydusLayers(ctx context.Context, cs content.Store, descs []ocispecs.De
 	uncompressedDgst := digest.SHA256.Digester()
 	uncompressed := io.MultiWriter(cw, uncompressedDgst.Hash())
 	if _, err := io.Copy(uncompressed, pr); err != nil {
-		log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) fail =====  %#+v ", uncompressed)
+		log.G(ctx).Infof("====zhaoshang io.Copy(uncompressed, pr) fail =====  %#+v ", uncompressed)
 		return nil, errors.Wrapf(err, "copy uncompressed bootstrap into %s", bootstrap.Name())
 	}
-	log.G(ctx).Info("====zhaoshang io.Copy(uncompressed, pr) success =====  %#+v ", uncompressed)
+	log.G(ctx).Infof("====zhaoshang io.Copy(uncompressed, pr) success =====  %#+v ", uncompressed)
 	if err := cw.Close(); err != nil {
 		return nil, errors.Wrap(err, "close gzip writer")
 	}

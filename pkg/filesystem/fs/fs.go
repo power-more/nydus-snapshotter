@@ -522,7 +522,7 @@ func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return err
 	}
 	handler, err := handler.NewLocalHandler(cfg, nydusBootstrap)
-	log.G(ctx).Info("====zhaoshang handler=====  %#+v ", *handler)
+	log.G(ctx).Infof("====zhaoshang handler=====  %#+v ", *handler)
 	if err != nil {
 		return err
 	}
@@ -530,10 +530,10 @@ func (fs *Filesystem) PrepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	if err = handler.Convert(context.Background(), source, true); err == nil {
 		SourceSet[source] = true
 		labels[label.NydusMetaLayer] = "true"
-		log.G(ctx).Info("====zhaoshang success=====  %#+v ", SourceSet)
+		log.G(ctx).Infof("====zhaoshang success=====  %#+v ", SourceSet)
 		return nil
 	} else {
-		log.G(ctx).Info("====zhaoshang err=====  %#+v ", err)
+		log.G(ctx).Infof("====zhaoshang err=====  %#+v ", err)
 		return err
 	}
 }

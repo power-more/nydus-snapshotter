@@ -85,7 +85,7 @@ func convertToNydusLayer(opt nydusify.PackOption, backend backend.Backend) conve
 		}
 
 		blobDigest := digester.Digest()
-		logrus.Info("====zhaoshang blobDigest=====  %#+v ", blobDigest)
+		logrus.Infof("====zhaoshang blobDigest=====  %#+v ", blobDigest)
 		info, err := cs.Info(ctx, blobDigest)
 		if err != nil {
 			return nil, errors.Wrapf(err, "get blob info %s", blobDigest)
