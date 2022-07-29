@@ -166,19 +166,6 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 		return nil, err
 	}
 
-	// var _handler *handler.LocalHandler
-	// // FIXME(zhaoshang) when to use handler
-	// if cfg.AcceldConfigPath != "" && nydusFs.ImageMode == fspkg.PreLoad {
-	// 	acceldcfg, err := acceldConfig.Parse(cfg.AcceldConfigPath)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	_handler, err = handler.NewLocalHandler(acceldcfg)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// }
-
 	var acceldcfg *acceldConfig.Config
 	if nydusFs.ImageMode == fspkg.PreLoad {
 		acceldcfg, err = acceldConfig.Parse(cfg.AcceldConfigPath)
@@ -345,7 +332,6 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 				}
 			}
 		} else if o.handler != nil && !o.fs.SupportMeta(ctx, base.Labels) {
-			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
 			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
@@ -963,6 +949,7 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return errors.Wrap(err, "failed to check last layer")
 	}
 
+	// FIXME(zhaoshang) how about blob exist?
 	blobpath := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], keyDigest.Encoded())
 	blob, err := os.OpenFile(blobpath, os.O_CREATE|os.O_RDWR, 0440)
 	if err != nil {
