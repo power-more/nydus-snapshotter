@@ -634,9 +634,6 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to create snapshot")
 	}
 
-	s1, err := storage.GetSnapshot(ctx, key)
-	logrus.Infof("====zhaoshang GetSnapshot=====  %#v ", s1)
-
 	if len(s.ParentIDs) > 0 {
 		st, err := os.Stat(o.upperPath(s.ParentIDs[0]))
 		if err != nil {
@@ -648,19 +645,16 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 			return nil, storage.Snapshot{}, errors.Wrap(err, "failed to chown")
 		}
 	}
-	logrus.Infof("====zhaoshang 1111111return &base, s, nil=====  %#v ", s1)
 	path = o.snapshotDir(s.ID)
 	if err = os.Rename(td, path); err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "failed to rename")
 	}
 	td = ""
-	logrus.Infof("====zhaoshang 22222222return &base, s, nil=====  %#v ", s1)
 	rollback = false
 	if err = t.Commit(); err != nil {
 		return nil, storage.Snapshot{}, errors.Wrap(err, "commit failed")
 	}
 	path = ""
-	logrus.Infof("====zhaoshang 333333333return &base, s, nil=====  %#v ", s1)
 	return &base, s, nil
 }
 

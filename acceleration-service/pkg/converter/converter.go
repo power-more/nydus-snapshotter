@@ -155,7 +155,6 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 
 	logrus.Infof("====zhaoshang cvt.manifestLayersMap %+v", cvt.manifestLayersMap)
 	for _, layerDesc := range descs {
-		logrus.Infof("====zhaoshang layerDesc.Digest = %s, currentLayerDigest = %s ", layerDesc.Digest, currentLayerDigest)
 		if layerDesc.Digest != currentLayerDigest {
 			continue
 		}
