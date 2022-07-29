@@ -346,7 +346,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 			logCtx.Infof("====zhaoshang findMetaLayer=====id = %#v, info = %#v, base = %#v", id, info, *base)
 			return o.remoteMounts(ctx, s, id, info.Labels)
-		} else {
+		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad {
 			logrus.Infof("====zhaoshang findMetaLayer err=====  %#v ", err)
 			if len(s.ParentIDs) == 0 {
 				logrus.Infof("====zhaoshang s.ParentIDs s=====  %#v ", s)
