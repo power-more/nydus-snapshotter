@@ -167,7 +167,8 @@ func NewSnapshotter(ctx context.Context, cfg *config.Config) (snapshots.Snapshot
 	}
 
 	var _handler *handler.LocalHandler
-	if cfg.AcceldConfigPath != "" {
+	// FIXME(zhaoshang) when to use handler
+	if cfg.AcceldConfigPath != "" && nydusFs.ImageMode == fspkg.PreLoad {
 		acceldcfg, err := acceldConfig.Parse(cfg.AcceldConfigPath)
 		if err != nil {
 			return nil, err
@@ -303,7 +304,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
 				}
 			}
-		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad && !o.fs.SupportMeta(ctx, base.Labels) {
+		} else if o.handler != nil && !o.fs.SupportMeta(ctx, base.Labels) {
 			// FIXME(zhaoshang), v6 + localfs + acceldconfigpath, still download bootstrap and manifest
 			log.G(ctx).Infof("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
 			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target)
@@ -346,7 +347,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 			logCtx.Infof("====zhaoshang findMetaLayer=====id = %#v, info = %#v, base = %#v", id, info, *base)
 			return o.remoteMounts(ctx, s, id, info.Labels)
-		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad {
+		} else if o.handler != nil {
 			logrus.Infof("====zhaoshang findMetaLayer err=====  %#v ", err)
 			if len(s.ParentIDs) == 0 {
 				logrus.Infof("====zhaoshang s.ParentIDs s=====  %#v ", s)
