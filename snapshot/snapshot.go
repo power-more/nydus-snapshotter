@@ -941,7 +941,7 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	// 	}
 	// }()
 
-	source, manifest, layer := registry.ParseLabels(labels)
+	source, manifest, layer, layers := registry.ParseLabels(labels)
 	if manifest == "" || layer == "" {
 		return fmt.Errorf("can not find manifestDigest and layerDigest from label %+v", labels)
 	}
@@ -953,10 +953,14 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	if err != nil {
 		return errors.Wrap(err, "failed to parse current layer digest")
 	}
-
 	keyDigest, err := digest.Parse(target)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse target")
+	}
+
+	var isLastLayer bool
+	if isLastLayer, err = checkIfLastLayer(layers, layer); err != nil {
+		return errors.Wrap(err, "failed to check last layer")
 	}
 
 	workdir := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], keyDigest.Encoded())
@@ -965,10 +969,26 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return errors.Wrap(err, "failed to open blob file")
 	}
 
-	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true); err == nil {
+	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer); err == nil {
 		return nil
 	} else {
 		return err
+	}
+}
+
+func checkIfLastLayer(layers string, currentlayer string) (bool, error) {
+	layersArr := strings.Split(layers, ",")
+	switch len(layersArr) {
+	case 0:
+		return false, fmt.Errorf("layers is empty")
+	case 1:
+		lastlayer := string(layersArr[0])
+		if lastlayer != currentlayer {
+			return false, fmt.Errorf("the len of layers is 1, but the last layer %s is not equal to current layer %s", lastlayer, currentlayer)
+		}
+		return true, nil
+	default:
+		return false, nil
 	}
 }
 

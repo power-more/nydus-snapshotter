@@ -154,7 +154,7 @@ func (fs *Filesystem) PrepareBlobLayer(ctx context.Context, snapshot storage.Sna
 		log.G(ctx).Infof("total nydus prepare data layer duration %d ms", duration.Milliseconds())
 	}()
 
-	ref, _, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest, _ := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return fmt.Errorf("can not find ref and digest from label %+v", labels)
 	}
@@ -244,7 +244,7 @@ func (fs *Filesystem) SupportStargz(ctx context.Context, labels map[string]strin
 	if !fs.StargzEnabled() {
 		return false, "", "", nil
 	}
-	ref, _, layerDigest := registry.ParseLabels(labels)
+	ref, _, layerDigest, _ := registry.ParseLabels(labels)
 	if ref == "" || layerDigest == "" {
 		return false, "", "", nil
 	}
