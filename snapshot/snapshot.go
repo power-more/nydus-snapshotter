@@ -343,7 +343,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 				return nil, err
 			}
 			return o.remoteMounts(ctx, s, id, info.Labels)
-		} else {
+		} else if o.handler != nil && o.fs.ImageMode == fspkg.PreLoad {
 			if len(s.ParentIDs) == 0 {
 				return o.mounts(ctx, base, s)
 			}
