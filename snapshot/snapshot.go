@@ -963,8 +963,8 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return errors.Wrap(err, "failed to check last layer")
 	}
 
-	workdir := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], keyDigest.Encoded())
-	blob, err := os.OpenFile(workdir, os.O_CREATE|os.O_RDWR, 0755)
+	blobpath := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], keyDigest.Encoded())
+	blob, err := os.OpenFile(blobpath, os.O_CREATE|os.O_RDWR, 0440)
 	if err != nil {
 		return errors.Wrap(err, "failed to open blob file")
 	}
