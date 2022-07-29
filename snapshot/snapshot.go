@@ -241,6 +241,11 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 		return nil, errors.Wrap(err, "failed to get active mount")
 	}
 
+	_, snap, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+	if err != nil {
+		return nil, errors.Wrap(err, fmt.Sprintf("failed to get info for snapshot %s", key))
+	}
+
 	if id, info, rErr := o.findMetaLayer(ctx, key); rErr == nil {
 		err = o.fs.WaitUntilReady(ctx, id)
 		if err != nil {
@@ -248,12 +253,22 @@ func (o *snapshotter) Mounts(ctx context.Context, key string) ([]mount.Mount, er
 			return nil, err
 		}
 		return o.remoteMounts(ctx, *s, id, info.Labels)
+	} else if o.handler != nil {
+		if len(s.ParentIDs) == 0 {
+			return o.mounts(ctx, &snap, *s)
+		}
+		cKey := snap.Parent
+		pid, pinfo, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, cKey)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get parent %s snapshot info of snapshot: %#v", cKey, snap)
+		}
+		bootstrap := filepath.Join(o.fs.UpperPath(pid), fspkg.BootstrapFile)
+		if _, err := os.Stat(bootstrap); err != nil {
+			return o.mounts(ctx, &snap, *s)
+		}
+		return o.remoteMounts(ctx, *s, pid, pinfo.Labels)
 	}
 
-	_, snap, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
-	if err != nil {
-		return nil, errors.Wrap(err, fmt.Sprintf("failed to get info for snapshot %s", key))
-	}
 	return o.mounts(ctx, &snap, *s)
 }
 
@@ -362,11 +377,11 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 				return o.mounts(ctx, base, s)
 			}
 			logCtx.Infof("failed to find meta layer label in snapshots, start to check whether there are blobs converted from the OCI layer named with the snapshot key")
-			_, info, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+			_, snap, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to get snapshot info")
 			}
-			cKey := info.Parent
+			cKey := snap.Parent
 			pid, pinfo, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, cKey)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to get parent snapshot info")
