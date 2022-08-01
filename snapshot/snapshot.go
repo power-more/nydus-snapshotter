@@ -516,9 +516,10 @@ func (o *snapshotter) Remove(ctx context.Context, key string) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to remove")
 	}
-	var cleanupBlob bool
-	if _, ok := snap.Labels[label.NydusDataLayer]; ok {
-		cleanupBlob = true
+	var blobDigest string
+	_, cleanupBlob := snap.Labels[label.NydusDataLayer]
+	if cleanupBlob {
+		blobDigest = snap.Labels[label.CRILayerDigest]
 	}
 
 	if o.syncRemove {
@@ -539,7 +540,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) error {
 					}
 				}
 				if cleanupBlob {
-					if err := o.fs.CleanupBlobLayer(ctx, key, false); err != nil {
+					if err := o.fs.CleanupBlobLayer(ctx, blobDigest, false); err != nil {
 						log.G(ctx).WithError(err).WithField("id", key).Warn("failed to remove blob")
 					}
 				}
@@ -548,7 +549,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) error {
 	} else {
 		defer func() {
 			if cleanupBlob {
-				if err := o.fs.CleanupBlobLayer(ctx, key, true); err != nil {
+				if err := o.fs.CleanupBlobLayer(ctx, blobDigest, true); err != nil {
 					log.G(ctx).WithError(err).WithField("id", key).Warn("failed to remove blob")
 				}
 			}
