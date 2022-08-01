@@ -32,6 +32,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/containerd/nydus-snapshotter/config"
 	fspkg "github.com/containerd/nydus-snapshotter/pkg/filesystem/fs"
@@ -335,7 +336,7 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 		} else if o.handler != nil && !o.fs.SupportMeta(ctx, base.Labels) {
 			log.G(ctx).Infof("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
-			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target)
+			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target, parent)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
 			} else {
@@ -914,7 +915,7 @@ func (o *snapshotter) snapshotDir(id string) string {
 	return filepath.Join(o.snapshotRoot(), id)
 }
 
-func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, target string) error {
+func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, target string, parent string) error {
 
 	// start := time.Now()
 	// defer func() {
@@ -967,6 +968,19 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return errors.Wrap(err, "failed to check last layer")
 	}
 
+	// the first layer
+	// logrus.Infof("====zhaoshang keyDigest %#v, layerDigest %#v", keyDigest, layerDigest)
+	// logrus.Infof("====zhaoshang parent %s", parent)
+	if parent == "" {
+		mwg := o.handler.GetWaitGroupMap()
+		var eg *errgroup.Group
+		eg, ctx = errgroup.WithContext(ctx)
+		mwg[manifestDigest] = eg
+
+		// mwg = o.handler.GetWaitGroupMap()
+		// logrus.Infof("====zhaoshang wait getmap %#v", mwg[manifestDigest])
+	}
+
 	// FIXME(zhaoshang) how about blob exist?
 	blobpath := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], blobName)
 	blob, err := os.OpenFile(blobpath, os.O_CREATE|os.O_RDWR, 0440)
@@ -975,9 +989,9 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	}
 	logrus.Infof("====zhaoshang blobfile=====  %+v", blob)
 
-	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer); err == nil {
+	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer, target); err == nil {
 		log.G(ctx).Infof("====zhaoshang success=====")
-		labels[label.NydusDataLayer] = keyDigest.String()
+		labels[label.NydusDataLayer] = target
 		return nil
 	} else {
 		log.G(ctx).Infof("====zhaoshang err=====  %#+v ", err)

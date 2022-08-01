@@ -29,6 +29,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/content"
@@ -46,13 +47,15 @@ type Converter interface {
 	// by specifying source image reference, the conversion is
 	// asynchronous, and if the sync option is specified,
 	// Dispatch will be blocked until the conversion is complete.
-	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error
+	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool, key string) error
 
 	Merge(ctx context.Context, blobs []string, bootstrap *os.File) error
 	// CheckHealth checks the containerd client can successfully
 	// connect to the containerd daemon and the healthcheck service
 	// returns the SERVING response.
 	CheckHealth(ctx context.Context) error
+
+	GetWaitGroupMap() map[digest.Digest]*errgroup.Group
 }
 
 type LocalConverter struct {
@@ -64,7 +67,8 @@ type LocalConverter struct {
 	driver      driver.Driver
 	pvd         content.Provider
 	// key is manifest digest, value is layers' descriptors (manifest.Layers)
-	manifestLayersMap map[digest.Digest][]ocispec.Descriptor
+	manifestLayersMap    map[digest.Digest][]ocispec.Descriptor
+	manifestWaitGroupMap map[digest.Digest]*errgroup.Group
 }
 
 func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
@@ -100,14 +104,15 @@ func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
 	}
 
 	localConverter := &LocalConverter{
-		cfg:               cfg,
-		rule:              rule,
-		worker:            worker,
-		client:            client,
-		snapshotter:       snapshotter,
-		driver:            driver,
-		pvd:               pvd,
-		manifestLayersMap: make(map[digest.Digest][]ocispec.Descriptor),
+		cfg:                  cfg,
+		rule:                 rule,
+		worker:               worker,
+		client:               client,
+		snapshotter:          snapshotter,
+		driver:               driver,
+		pvd:                  pvd,
+		manifestLayersMap:    make(map[digest.Digest][]ocispec.Descriptor),
+		manifestWaitGroupMap: make(map[digest.Digest]*errgroup.Group),
 	}
 
 	return localConverter, nil
@@ -117,7 +122,7 @@ func (cvt *LocalConverter) Merge(ctx context.Context, blobs []string, bootstrap 
 	return cvt.driver.Merge(ctx, cvt.pvd, blobs, bootstrap)
 }
 
-func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File, isLastLayer bool) error {
+func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File, isLastLayer bool, key string) error {
 	ctx, done, err := cvt.client.WithLease(ctx)
 	if err != nil {
 		return errors.Wrap(err, "create lease")
@@ -159,31 +164,51 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 			continue
 		}
 
-		// if cvt.cfg.Converter.Async, go routine
-		logger.Infof("converting layer %s in image %s", currentLayerDigest, source)
-		start := time.Now()
-		if _, err := cvt.driver.Convert(ctx, cvt.pvd, layerDesc, blob); err != nil {
-			return errors.Wrap(err, "converting layer")
+		if cvt.cfg.Converter.Async {
+			// go convertThread
+			logrus.Infof("====zhaoshang wait map %#v", cvt.manifestWaitGroupMap[manifestDigest])
+			cvt.manifestWaitGroupMap[manifestDigest].Go(cvt.convertThread(ctx, cvt.pvd, layerDesc, blob))
+		} else {
+			logger.Infof("converting layer %s in image %s", currentLayerDigest, source)
+			start := time.Now()
+			if _, err := cvt.driver.Convert(ctx, cvt.pvd, layerDesc, blob); err != nil {
+				return errors.Wrap(err, "converting layer")
+			}
+			logger.Infof("converted layer %s in image %s, elapse %s", currentLayerDigest, source, time.Since(start))
 		}
-		logger.Infof("converted layer %s in image %s, elapse %s", currentLayerDigest, source, time.Since(start))
 		break
 	}
 
 	if cvt.cfg.Converter.Async && isLastLayer {
 		// wait group
+		logrus.Infof("====zhaoshang wait start, %#v", cvt.manifestWaitGroupMap[manifestDigest])
+		if err := cvt.manifestWaitGroupMap[manifestDigest].Wait(); err != nil { // group 的wait方法，等待上面的 g.go的协程执行完成，并且可以接受错误
+			logrus.Infof("====zhaoshang wait err %#v", err)
+			return errors.Wrap(err, "converting layer async")
+		}
+		logrus.Infof("====zhaoshang wait success")
 	}
 
 	return nil
 }
 
-func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error {
+func (cvt *LocalConverter) convertThread(ctx context.Context, provider content.Provider, layerDesc ocispec.Descriptor, blob *os.File) func() error {
+	return func() error {
+		if _, err := cvt.driver.Convert(ctx, cvt.pvd, layerDesc, blob); err != nil {
+			return errors.Wrap(err, "converting layer")
+		}
+		return nil
+	}
+}
+
+func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool, key string) error {
 	taskID := task.Manager.Create(ref)
 
 	if sync {
 		// FIXME: The synchronous conversion task should also be
 		// executed in a limited worker queue.
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob, isLastLayer)
+			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob, isLastLayer, key)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
@@ -191,7 +216,7 @@ func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDig
 
 	cvt.worker.Dispatch(func() error {
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob, isLastLayer)
+			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob, isLastLayer, key)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
@@ -217,4 +242,8 @@ func (cvt *LocalConverter) CheckHealth(ctx context.Context) error {
 
 func (cvt *LocalConverter) GetContentStore() containerdcontent.Store {
 	return cvt.pvd.ContentStore()
+}
+
+func (cvt *LocalConverter) GetWaitGroupMap() map[digest.Digest]*errgroup.Group {
+	return cvt.manifestWaitGroupMap
 }

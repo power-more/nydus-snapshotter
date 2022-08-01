@@ -22,6 +22,7 @@ import (
 
 	"github.com/opencontainers/go-digest"
 	"github.com/pkg/errors"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/config"
 	"github.com/containerd/nydus-snapshotter/acceleration-service/pkg/converter"
@@ -76,8 +77,8 @@ func (handler *LocalHandler) Auth(ctx context.Context, host string, authHeader s
 	return nil
 }
 
-func (handler *LocalHandler) Convert(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error {
-	return handler.cvt.Dispatch(ctx, ref, manifestDigest, layerDigest, blob, sync, isLastLayer)
+func (handler *LocalHandler) Convert(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool, key string) error {
+	return handler.cvt.Dispatch(ctx, ref, manifestDigest, layerDigest, blob, sync, isLastLayer, key)
 }
 
 func (handler *LocalHandler) CheckHealth(ctx context.Context) error {
@@ -92,4 +93,8 @@ func (handler *LocalHandler) GetConfig() *config.Config {
 
 func (handler *LocalHandler) Merge(ctx context.Context, blobs []string, bootstrap *os.File) error {
 	return handler.cvt.Merge(ctx, blobs, bootstrap)
+}
+
+func (handler *LocalHandler) GetWaitGroupMap() map[digest.Digest]*errgroup.Group {
+	return handler.cvt.GetWaitGroupMap()
 }
