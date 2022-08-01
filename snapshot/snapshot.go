@@ -501,10 +501,13 @@ func (o *snapshotter) Remove(ctx context.Context, key string) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to remove")
 	}
+
 	var blobDigest string
-	_, cleanupBlob := snap.Labels[label.NydusDataLayer]
-	if cleanupBlob {
-		blobDigest = snap.Labels[label.CRILayerDigest]
+	var cleanupBlob bool
+	if blobDigest, cleanupBlob = snap.Labels[label.NydusConvertedLayer]; !cleanupBlob {
+		if _, cleanupBlob = snap.Labels[label.NydusDataLayer]; cleanupBlob {
+			blobDigest = snap.Labels[label.CRILayerDigest]
+		}
 	}
 
 	if o.syncRemove {
@@ -948,20 +951,22 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	if err != nil {
 		return errors.Wrap(err, "failed to parse target")
 	}
+	blobName := keyDigest.Encoded()
 
 	var isLastLayer bool
 	if isLastLayer, err = checkIfLastLayer(layers, layer); err != nil {
 		return errors.Wrap(err, "failed to check last layer")
 	}
 
-	blobpath := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], keyDigest.Encoded())
+	blobpath := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], blobName)
 	blob, err := os.OpenFile(blobpath, os.O_CREATE|os.O_RDWR, 0440)
 	if err != nil {
 		return errors.Wrap(err, "failed to open blob file")
 	}
 
 	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer); err == nil {
-		log.G(ctx).Infof("convert OCI layers to nydus blobs successfully")
+		labels[label.NydusConvertedLayer] = keyDigest.String()
+		log.G(ctx).Infof("convert OCI layers to nydus blobs successfully, and add (%s, %s) into labels", label.NydusConvertedLayer, labels[label.NydusConvertedLayer])
 		return nil
 	} else {
 		return errors.Wrap(err, "failed to convert OCI layers to nydus blobs")
