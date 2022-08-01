@@ -959,6 +959,7 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	if err != nil {
 		return errors.Wrap(err, "failed to parse target")
 	}
+	blobName := keyDigest.Encoded()
 
 	var isLastLayer bool
 	if isLastLayer, err = checkIfLastLayer(layers, layer); err != nil {
@@ -966,7 +967,7 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	}
 
 	// FIXME(zhaoshang) how about blob exist?
-	blobpath := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], keyDigest.Encoded())
+	blobpath := filepath.Join(o.handler.GetConfig().Converter.Driver.Config["work_dir"], blobName)
 	blob, err := os.OpenFile(blobpath, os.O_CREATE|os.O_RDWR, 0440)
 	if err != nil {
 		return errors.Wrap(err, "failed to open blob file")
@@ -975,6 +976,7 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 
 	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer); err == nil {
 		log.G(ctx).Infof("====zhaoshang success=====")
+		labels[label.NydusDataLayer] = keyDigest.String()
 		return nil
 	} else {
 		log.G(ctx).Infof("====zhaoshang err=====  %#+v ", err)
