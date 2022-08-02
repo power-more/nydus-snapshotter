@@ -164,6 +164,10 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 			continue
 		}
 
+		if isLastLayer {
+			delete(cvt.manifestLayersMap, manifestDigest)
+		}
+
 		if cvt.cfg.Converter.Async {
 			// go convertThread
 			logrus.Infof("====zhaoshang wait map %#v", cvt.manifestWaitGroupMap[manifestDigest])
