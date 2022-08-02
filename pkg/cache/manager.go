@@ -8,6 +8,7 @@ import (
 	"github.com/containerd/nydus-snapshotter/config"
 	"github.com/containerd/nydus-snapshotter/pkg/store"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 type Manager struct {
@@ -57,6 +58,7 @@ func NewManager(opt Opt) (*Manager, error) {
 
 	go m.runGC()
 	log.L.Info("gc goroutine start...")
+	logrus.Info("====zhaoshang gc=====  %#v ", opt.Period)
 
 	return m, nil
 }
@@ -74,6 +76,7 @@ func (m *Manager) SchedGC() {
 
 func (m *Manager) runGC() {
 	tick := time.NewTicker(m.period)
+	logrus.Info("====zhaoshang tick=====  %#v ", tick)
 	defer tick.Stop()
 	for {
 		select {
@@ -83,6 +86,7 @@ func (m *Manager) runGC() {
 			}
 			tick.Reset(m.period)
 		case <-tick.C:
+			logrus.Info("====zhaoshang tick.C=====  %#v ", tick)
 			if err := m.gc(); err != nil {
 				log.L.Infof("[tick] cache gc err, %v", err)
 			}
