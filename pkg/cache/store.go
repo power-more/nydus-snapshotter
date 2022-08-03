@@ -22,7 +22,7 @@ func NewStore(cacheDir string) *Store {
 
 func (cs *Store) DelBlob(blob string) error {
 	blobPath := cs.blobPath(blob)
-	logrus.Info("====zhaoshang DelBlob=====  %#v ", blobPath)
+	logrus.Infof("====zhaoshang DelBlob=====  %#v ", blobPath)
 	// Remove the blob chunkmap file named $blob_id.chunk_map first.
 	chunkMapPath := blobPath + chunkMapFileSuffix
 	if err := os.Remove(chunkMapPath); err != nil {

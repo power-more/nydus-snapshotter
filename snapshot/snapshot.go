@@ -208,8 +208,20 @@ func (o *snapshotter) Cleanup(ctx context.Context) error {
 }
 
 func (o *snapshotter) Stat(ctx context.Context, key string) (snapshots.Info, error) {
+	logrus.Infof("====zhaoshang into Stat=====  %s ", key)
+	// key is chainID, realkey is long key with extract-.
+	realkey, isConverting := o.chainIDisConverting(key)
+	if isConverting {
+		key = realkey
+	}
+
 	_, info, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+	logrus.Infof("====zhaoshang return Stat=====key = %s, err = %#v ", key, err)
 	return info, err
+}
+
+func (o *snapshotter) chainIDisConverting(chainID string) (string, bool) {
+	return o.handler.ChainIDisConverting(chainID)
 }
 
 func (o *snapshotter) Update(ctx context.Context, info snapshots.Info, fieldpaths ...string) (snapshots.Info, error) {
@@ -349,14 +361,17 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 				log.G(ctx).WithError(err).Warnf("==zhaoshang=== 1111failed to get getSnapShot of %q", keyortarget)
 				return nil, err
 			}
-			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target, parent)
+			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target, key, parent, func() {
+				o.Commit(ctx, target, key, append(opts, snapshots.WithLabels(base.Labels))...)
+			})
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
 			} else {
-				err := o.Commit(ctx, target, key, append(opts, snapshots.WithLabels(base.Labels))...)
-				if err == nil || errdefs.IsAlreadyExists(err) {
-					return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
-				}
+				return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
+				// err := o.Commit(ctx, target, key, append(opts, snapshots.WithLabels(base.Labels))...)
+				// if err == nil || errdefs.IsAlreadyExists(err) {
+				// 	return nil, errors.Wrapf(errdefs.ErrAlreadyExists, "target snapshot %q", target)
+				// }
 			}
 		}
 	}
@@ -930,7 +945,7 @@ func (o *snapshotter) snapshotDir(id string) string {
 	return filepath.Join(o.snapshotRoot(), id)
 }
 
-func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, target string, parent string) error {
+func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snapshot, labels map[string]string, chainID string, key string, parent string, commit func()) error {
 
 	// start := time.Now()
 	// defer func() {
@@ -972,9 +987,9 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	if err != nil {
 		return errors.Wrap(err, "failed to parse current layer digest")
 	}
-	keyDigest, err := digest.Parse(target)
+	keyDigest, err := digest.Parse(chainID)
 	if err != nil {
-		return errors.Wrap(err, "failed to parse target")
+		return errors.Wrap(err, "failed to parse chainID")
 	}
 	blobName := keyDigest.Encoded()
 
@@ -1004,9 +1019,9 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 	}
 	logrus.Infof("====zhaoshang blobfile=====  %+v", blob)
 
-	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer, target); err == nil {
+	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer, chainID, key, commit); err == nil {
 		log.G(ctx).Infof("====zhaoshang success=====")
-		labels[label.NydusDataLayer] = target
+		labels[label.NydusDataLayer] = chainID
 		return nil
 	} else {
 		log.G(ctx).Infof("====zhaoshang err=====  %#+v ", err)

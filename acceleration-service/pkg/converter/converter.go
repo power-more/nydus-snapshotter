@@ -47,7 +47,7 @@ type Converter interface {
 	// by specifying source image reference, the conversion is
 	// asynchronous, and if the sync option is specified,
 	// Dispatch will be blocked until the conversion is complete.
-	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool, key string) error
+	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool, chainID string, key string, commit func()) error
 
 	Merge(ctx context.Context, blobs []string, bootstrap *os.File) error
 	// CheckHealth checks the containerd client can successfully
@@ -56,6 +56,7 @@ type Converter interface {
 	CheckHealth(ctx context.Context) error
 
 	GetWaitGroupMap() map[digest.Digest]*errgroup.Group
+	ChainIDisConverting(chainID string) (string, bool)
 }
 
 type LocalConverter struct {
@@ -69,6 +70,12 @@ type LocalConverter struct {
 	// key is manifest digest, value is layers' descriptors (manifest.Layers)
 	manifestLayersMap    map[digest.Digest][]ocispec.Descriptor
 	manifestWaitGroupMap map[digest.Digest]*errgroup.Group
+	chainIDisConverting  map[string]KeyAndIsConverting
+}
+
+type KeyAndIsConverting struct {
+	key          string
+	isConverting bool
 }
 
 func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
@@ -113,6 +120,7 @@ func NewLocalConverter(cfg *config.Config) (*LocalConverter, error) {
 		pvd:                  pvd,
 		manifestLayersMap:    make(map[digest.Digest][]ocispec.Descriptor),
 		manifestWaitGroupMap: make(map[digest.Digest]*errgroup.Group),
+		chainIDisConverting:  make(map[string]KeyAndIsConverting),
 	}
 
 	return localConverter, nil
@@ -122,7 +130,7 @@ func (cvt *LocalConverter) Merge(ctx context.Context, blobs []string, bootstrap 
 	return cvt.driver.Merge(ctx, cvt.pvd, blobs, bootstrap)
 }
 
-func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File, isLastLayer bool, key string) error {
+func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestDigest digest.Digest, currentLayerDigest digest.Digest, blob *os.File, isLastLayer bool, chainID string, key string, commit func()) error {
 	ctx, done, err := cvt.client.WithLease(ctx)
 	if err != nil {
 		return errors.Wrap(err, "create lease")
@@ -171,7 +179,24 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 		if cvt.cfg.Converter.Async {
 			// go convertThread
 			logrus.Infof("====zhaoshang wait map %#v", cvt.manifestWaitGroupMap[manifestDigest])
-			cvt.manifestWaitGroupMap[manifestDigest].Go(cvt.convertThread(ctx, cvt.pvd, layerDesc, blob))
+			cvt.chainIDisConverting[chainID] = KeyAndIsConverting{key, true}
+			logrus.Infof("====zhaoshang chainID map %#v", cvt.chainIDisConverting)
+			cvt.manifestWaitGroupMap[manifestDigest].Go(func() error {
+				entry, ok := cvt.chainIDisConverting[chainID]
+				if !ok {
+					return fmt.Errorf("get chainIDisConverting map entry by chainID %s", chainID)
+				}
+
+				_, err := cvt.driver.Convert(ctx, cvt.pvd, layerDesc, blob)
+				entry.isConverting = false
+				cvt.chainIDisConverting[chainID] = entry
+				logrus.Infof("====zhaoshang del chainID map %#v", cvt.chainIDisConverting)
+				if err != nil {
+					return errors.Wrap(err, "converting layer")
+				}
+				commit()
+				return nil
+			})
 		} else {
 			logger.Infof("converting layer %s in image %s", currentLayerDigest, source)
 			start := time.Now()
@@ -196,35 +221,26 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 	return nil
 }
 
-func (cvt *LocalConverter) convertThread(ctx context.Context, provider content.Provider, layerDesc ocispec.Descriptor, blob *os.File) func() error {
-	return func() error {
-		if _, err := cvt.driver.Convert(ctx, cvt.pvd, layerDesc, blob); err != nil {
-			return errors.Wrap(err, "converting layer")
-		}
-		return nil
-	}
-}
-
-func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool, key string) error {
+func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool, chainID string, key string, commit func()) error {
 	taskID := task.Manager.Create(ref)
 
 	if sync {
 		// FIXME: The synchronous conversion task should also be
 		// executed in a limited worker queue.
 		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob, isLastLayer, key)
+			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob, isLastLayer, chainID, key, commit)
 			task.Manager.Finish(taskID, err)
 			return err
 		}, "convert")
 	}
 
-	cvt.worker.Dispatch(func() error {
-		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob, isLastLayer, key)
-			task.Manager.Finish(taskID, err)
-			return err
-		}, "convert")
-	})
+	// cvt.worker.Dispatch(func() error {
+	// 	return metrics.Conversion.OpWrap(func() error {
+	// 		err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob, isLastLayer, chainID, key)
+	// 		task.Manager.Finish(taskID, err)
+	// 		return err
+	// 	}, "convert")
+	// })
 
 	return nil
 }
@@ -250,4 +266,14 @@ func (cvt *LocalConverter) GetContentStore() containerdcontent.Store {
 
 func (cvt *LocalConverter) GetWaitGroupMap() map[digest.Digest]*errgroup.Group {
 	return cvt.manifestWaitGroupMap
+}
+
+func (cvt *LocalConverter) ChainIDisConverting(chainID string) (string, bool) {
+	logrus.Infof("====zhaoshang ChainIDisConverting %#v, chainID %s", cvt.chainIDisConverting, chainID)
+	entry, ok := cvt.chainIDisConverting[chainID]
+	if !ok {
+		logrus.Infof("====zhaoshang !ok ChainIDisConverting %#v, chainID %s", cvt.chainIDisConverting, chainID)
+		return "", false
+	}
+	return entry.key, entry.isConverting
 }
