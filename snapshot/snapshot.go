@@ -336,6 +336,19 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 			}
 		} else if o.handler != nil && !o.fs.SupportMeta(ctx, base.Labels) {
 			log.G(ctx).Infof("====zhaoshang into 2222 o.acceldConfigPath=====base.Labels = %#+v", base.Labels)
+			keyortarget := key
+			snapinfo, err := o.Stat(ctx, keyortarget)
+			logrus.Infof("====zhaoshang 1111o.Stat(key = %s) snapshot.info = %#v", keyortarget, snapinfo)
+			if err != nil {
+				log.G(ctx).WithError(err).Warnf("==zhaoshang=== 1111failed to get info of %q", keyortarget)
+				return nil, err
+			}
+			snap, err := o.getSnapShot(ctx, keyortarget)
+			logrus.Infof("====zhaoshang 1111o.getSnapShot(key = %s) snapshot.info = %#v", keyortarget, snap)
+			if err != nil {
+				log.G(ctx).WithError(err).Warnf("==zhaoshang=== 1111failed to get getSnapShot of %q", keyortarget)
+				return nil, err
+			}
 			err = o.prepareOCItoNydusLayer(ctx, s, base.Labels, target, parent)
 			if err != nil {
 				logCtx.Errorf("failed to prepare oci to nydus layer of snapshot ID %s, err: %v", s.ID, err)
@@ -379,10 +392,12 @@ func (o *snapshotter) Prepare(ctx context.Context, key, parent string, opts ...s
 		} else if o.handler != nil {
 			logrus.Infof("====zhaoshang findMetaLayer err=====  %#v ", err)
 			if len(s.ParentIDs) == 0 {
-				logrus.Infof("====zhaoshang s.ParentIDs s=====  %#v ", s)
+				logrus.Infof("====zhaoshang s has no parents, s = %#v ", s)
 				return o.mounts(ctx, base, s)
 			}
-			_, snap, _, err := snapshot.GetSnapshotInfo(ctx, o.ms, key)
+
+			snap, err := o.Stat(ctx, key)
+			logrus.Infof("====zhaoshang o.Stat(key = %s) snapshot.info = %#v", key, snap)
 			if err != nil {
 				log.G(ctx).WithError(err).Warnf("==zhaoshang=== failed to get info of %q", key)
 				return nil, err
