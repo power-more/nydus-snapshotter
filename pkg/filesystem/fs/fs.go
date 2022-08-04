@@ -471,14 +471,16 @@ func (fs *Filesystem) IsNydusMetaLayer(ctx context.Context, labels map[string]st
 // Mount will be called when containerd snapshotter prepare remote snapshotter
 // this method will fork nydus daemon and manage it in the internal store, and indexed by snapshotID
 func (fs *Filesystem) Mount(ctx context.Context, snapshotID string, labels map[string]string) (err error) {
-	// If NoneDaemon mode, we don't mount nydus on host
-	if !fs.hasDaemon() {
-		return nil
-	}
-
 	imageID, ok := labels[label.CRIImageRef]
 	if !ok {
 		return fmt.Errorf("failed to find image ref of snapshot %s, labels %v", snapshotID, labels)
+	}
+
+	// If NoneDaemon mode, we don't mount nydus on host
+	if !fs.hasDaemon() {
+		// FIXME(zhaoshang): verify bootstrap file of image?
+		fs.addSnapshot(imageID, labels)
+		return nil
 	}
 
 	d, err := fs.newDaemon(ctx, snapshotID, imageID)
@@ -529,7 +531,15 @@ func (fs *Filesystem) WaitUntilReady(ctx context.Context, snapshotID string) err
 	return d.WaitUntilReady()
 }
 
-func (fs *Filesystem) Umount(ctx context.Context, mountPoint string) error {
+func (fs *Filesystem) Umount(ctx context.Context, mountPoint string, imageID string) error {
+	if fs.cacheMgr != nil && imageID != "" {
+		if err := fs.cacheMgr.DelSnapshot(imageID); err != nil {
+			return errors.Wrap(err, "del snapshot err")
+		}
+		log.L.Debugf("remove snapshot %s\n", imageID)
+		fs.cacheMgr.SchedGC()
+	}
+
 	if !fs.hasDaemon() {
 		return nil
 	}
@@ -544,7 +554,7 @@ func (fs *Filesystem) Umount(ctx context.Context, mountPoint string) error {
 		return errors.Wrap(err, "destroy daemon err")
 	}
 
-	if fs.cacheMgr != nil {
+	if fs.cacheMgr != nil && imageID == "" {
 		if err := fs.cacheMgr.DelSnapshot(daemon.ImageID); err != nil {
 			return errors.Wrap(err, "del snapshot err")
 		}
@@ -561,7 +571,7 @@ func (fs *Filesystem) Cleanup(ctx context.Context) error {
 	}
 
 	for _, d := range fs.manager.ListDaemons() {
-		err := fs.Umount(ctx, filepath.Dir(d.MountPoint()))
+		err := fs.Umount(ctx, filepath.Dir(d.MountPoint()), "")
 		if err != nil {
 			log.G(ctx).Infof("failed to umount %s err %+v", d.MountPoint(), err)
 		}

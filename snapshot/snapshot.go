@@ -182,7 +182,7 @@ func (o *snapshotter) Cleanup(ctx context.Context) error {
 
 	log.G(ctx).Infof("cleanup: dirs=%v", cleanup)
 	for _, dir := range cleanup {
-		if err := o.cleanupSnapshotDirectory(ctx, dir); err != nil {
+		if err := o.cleanupSnapshotDirectory(ctx, dir, ""); err != nil {
 			log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
 		}
 	}
@@ -420,7 +420,7 @@ func (o *snapshotter) Remove(ctx context.Context, key string) error {
 		defer func() {
 			if err == nil {
 				for _, dir := range removals {
-					if err := o.cleanupSnapshotDirectory(ctx, dir); err != nil {
+					if err := o.cleanupSnapshotDirectory(ctx, dir, snap.Labels[label.CRIImageRef]); err != nil {
 						log.G(ctx).WithError(err).WithField("path", dir).Warn("failed to remove directory")
 					}
 				}
@@ -498,12 +498,12 @@ func (o *snapshotter) createSnapshot(ctx context.Context, kind snapshots.Kind, k
 	var td, path string
 	defer func() {
 		if td != "" {
-			if err1 := o.cleanupSnapshotDirectory(ctx, td); err1 != nil {
+			if err1 := o.cleanupSnapshotDirectory(ctx, td, base.Labels[label.CRIImageRef]); err1 != nil {
 				log.G(ctx).WithError(err1).Warn("failed to cleanup temp snapshot directory")
 			}
 		}
 		if path != "" {
-			if err1 := o.cleanupSnapshotDirectory(ctx, path); err1 != nil {
+			if err1 := o.cleanupSnapshotDirectory(ctx, path, base.Labels[label.CRIImageRef]); err1 != nil {
 				log.G(ctx).WithError(err1).WithField("path", path).Error("failed to reclaim snapshot directory, directory may need removal")
 				err = errors.Wrapf(err, "failed to remove path: %v", err1)
 			}
@@ -779,12 +779,12 @@ func (o *snapshotter) cleanupDirectories(ctx context.Context) ([]string, error) 
 	return o.getCleanupDirectories(ctx)
 }
 
-func (o *snapshotter) cleanupSnapshotDirectory(ctx context.Context, dir string) error {
+func (o *snapshotter) cleanupSnapshotDirectory(ctx context.Context, dir string, imageID string) error {
 	// On a remote snapshot, the layer is mounted on the "fs" directory.
 	// We use Filesystem's Unmount API so that it can do necessary finalization
 	// before/after the unmount.
 	log.G(ctx).WithField("dir", dir).Infof("cleanupSnapshotDirectory %s", dir)
-	if err := o.fs.Umount(ctx, dir); err != nil && !os.IsNotExist(err) {
+	if err := o.fs.Umount(ctx, dir, imageID); err != nil && !os.IsNotExist(err) {
 		log.G(ctx).WithError(err).WithField("dir", dir).Error("failed to unmount")
 	}
 
