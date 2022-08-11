@@ -46,7 +46,7 @@ type Converter interface {
 	// by specifying source image reference, the conversion is
 	// asynchronous, and if the sync option is specified,
 	// Dispatch will be blocked until the conversion is complete.
-	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error
+	Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, isLastLayer bool) error
 
 	Merge(ctx context.Context, blobs []string, bootstrap *os.File) error
 	// CheckHealth checks the containerd client can successfully
@@ -175,28 +175,13 @@ func (cvt *LocalConverter) Convert(ctx context.Context, source string, manifestD
 	return nil
 }
 
-func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, sync bool, isLastLayer bool) error {
+func (cvt *LocalConverter) Dispatch(ctx context.Context, ref string, manifestDigest digest.Digest, layerDigest digest.Digest, blob *os.File, isLastLayer bool) error {
 	taskID := task.Manager.Create(ref)
-
-	if sync {
-		// FIXME: The synchronous conversion task should also be
-		// executed in a limited worker queue.
-		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob, isLastLayer)
-			task.Manager.Finish(taskID, err)
-			return err
-		}, "convert")
-	}
-
-	cvt.worker.Dispatch(func() error {
-		return metrics.Conversion.OpWrap(func() error {
-			err := cvt.Convert(context.Background(), ref, manifestDigest, layerDigest, blob, isLastLayer)
-			task.Manager.Finish(taskID, err)
-			return err
-		}, "convert")
-	})
-
-	return nil
+	return metrics.Conversion.OpWrap(func() error {
+		err := cvt.Convert(ctx, ref, manifestDigest, layerDigest, blob, isLastLayer)
+		task.Manager.Finish(taskID, err)
+		return err
+	}, "convert")
 }
 
 func (cvt *LocalConverter) CheckHealth(ctx context.Context) error {

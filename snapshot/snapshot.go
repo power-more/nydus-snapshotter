@@ -964,7 +964,7 @@ func (o *snapshotter) prepareOCItoNydusLayer(ctx context.Context, s storage.Snap
 		return errors.Wrap(err, "failed to open blob file")
 	}
 
-	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, true, isLastLayer); err == nil {
+	if err = o.handler.Convert(context.Background(), source, manifestDigest, layerDigest, blob, isLastLayer); err == nil {
 		labels[label.NydusConvertedLayer] = keyDigest.String()
 		log.G(ctx).Infof("convert OCI layers to nydus blobs successfully, and add (%s, %s) into labels", label.NydusConvertedLayer, labels[label.NydusConvertedLayer])
 		return nil
